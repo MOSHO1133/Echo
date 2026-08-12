@@ -12,12 +12,13 @@ FIELD_QUERIES = {
 
 
 def summarize_paper(paper_id):
-    """Generates all four structured summary fields via the shared RAG pipeline,
-    scoped to just this one paper, then caches the result in SQLite."""
     result = {}
     for field, question in FIELD_QUERIES.items():
-        out = rag.ask(question, paper_ids=[paper_id], k=4)
-        result[field] = out["answer"]
+        try:
+            out = rag.ask(question, paper_ids=[paper_id], k=4)
+            result[field] = out["answer"]
+        except Exception as e:
+            result[field] = f"Could not generate: {e}"
 
     conn = db.get_conn()
     conn.execute(

@@ -1,10 +1,13 @@
+import os
 import anthropic
 
 from . import db, embeddings
 
-client = anthropic.Anthropic()
-MODEL = "claude-sonnet-4-6"
-
+client = anthropic.Anthropic(
+    api_key=os.getenv("XAI_API_KEY"),
+    base_url="https://api.x.ai/v1"
+)
+MODEL = os.getenv("GROK_MODEL", "grok-4.5")
 
 def get_paper_titles(paper_ids):
     if not paper_ids:

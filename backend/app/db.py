@@ -22,6 +22,7 @@ def init_db():
             venue TEXT,
             source TEXT,
             doi TEXT,
+            pdf_url TEXT,
             tags TEXT,
             credibility TEXT DEFAULT 'unscored',
             full_text TEXT,

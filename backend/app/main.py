@@ -2,7 +2,7 @@ import datetime
 import uuid
 from typing import List, Optional
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -47,25 +47,35 @@ class AddFromSearchReq(BaseModel):
     venue: str = ""
     source: str = "arXiv"
     doi: str = ""
+    pdf_url: str = ""
 
 
-def _ingest_and_store(paper_id, title, authors, year, venue, source, doi, full_text):
-    sections = processing.detect_sections(full_text)
-    chunks = processing.chunk_sections(sections)
-    embeddings.index_paper_chunks(paper_id, chunks)
-
+def _store_paper(paper_id, title, authors, year, venue, source, doi, pdf_url, full_text):
     conn = db.get_conn()
     conn.execute(
         """INSERT OR REPLACE INTO papers
-           (id, title, authors, year, venue, source, doi, tags, full_text, in_library, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
-        (paper_id, title, authors, year, venue, source, doi, "", full_text, datetime.datetime.now(datetime.UTC).isoformat()),
+           (id, title, authors, year, venue, source, doi, pdf_url, tags, full_text, in_library, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+        (paper_id, title, authors, year, venue, source, doi, pdf_url, "", full_text, datetime.datetime.now(datetime.UTC).isoformat()),
     )
     conn.commit()
     conn.close()
 
-    if chunks:
-        summarize.summarize_paper(paper_id)
+
+def _index_and_summarize(paper_id, full_text):
+    """Runs in the background after the paper row already exists, so a
+    summarization failure never hides the paper from the library."""
+    try:
+        sections = processing.detect_sections(full_text)
+        chunks = processing.chunk_sections(sections)
+        embeddings.index_paper_chunks(paper_id, chunks)
+        if chunks:
+            summarize.summarize_paper(paper_id)
+    except Exception as e:
+        conn = db.get_conn()
+        conn.execute("UPDATE papers SET research_gap=? WHERE id=?", (f"Processing failed: {e}", paper_id))
+        conn.commit()
+        conn.close()
 
 
 @app.get("/health")
@@ -80,18 +90,23 @@ def search(req: SearchReq):
 
 
 @app.post("/library/add-from-search")
-def add_from_search(req: AddFromSearchReq):
+def add_from_search(req: AddFromSearchReq, background_tasks: BackgroundTasks):
     paper_id = req.id or str(uuid.uuid4())
-    _ingest_and_store(paper_id, req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.abstract)
+    full_text = ingestion.fetch_arxiv_full_text(req.pdf_url) if req.pdf_url else ""
+    if not full_text:
+        full_text = req.abstract
+    _store_paper(paper_id, req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.pdf_url, full_text)
+    background_tasks.add_task(_index_and_summarize, paper_id, full_text)
     return {"id": paper_id}
 
 
 @app.post("/library/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     content = await file.read()
     text = ingestion.extract_pdf_text(content)
     paper_id = str(uuid.uuid4())
-    _ingest_and_store(paper_id, file.filename, "Uploaded by you", "", "", "upload", "", text)
+    _store_paper(paper_id, file.filename, "Uploaded by you", "", "", "upload", "", "", text)
+    background_tasks.add_task(_index_and_summarize, paper_id, text)
     return {"id": paper_id}
 
 
