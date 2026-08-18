@@ -7,7 +7,7 @@
 ![Groq](https://img.shields.io/badge/LLM-Groq-F55036)
 ![SQLite](https://img.shields.io/badge/SQLite-Database-003B57?logo=sqlite&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Active-2EA44F)
-![License](https://img.shields.io/badge/License-Unlicensed-lightgrey)
+![License](https://img.shields.io/badge/License-Apache%202.0-D22128)
 
 Echo is a local-first research assistant that helps researchers, students, and independent
 learners move from **literature discovery** to **identifying where they could contribute
@@ -339,3 +339,9 @@ Open `http://localhost:5500/echo_app.html`.
 - The app currently has no authentication layer — it's designed to run locally on `localhost`
   for a single user. Do not expose the backend directly to the public internet without adding
   an auth layer first.
+
+---
+
+## Author
+
+Built by **Muhammad Shees**.
