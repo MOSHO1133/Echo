@@ -16,6 +16,9 @@ db.init_db()
 
 class SearchReq(BaseModel):
     query: str
+    max_results: int = 15
+    year_from: Optional[str] = None
+    year_to: Optional[str] = None
 
 
 class AskReq(BaseModel):
@@ -85,7 +88,7 @@ def health():
 
 @app.post("/search")
 def search(req: SearchReq):
-    results = ingestion.search_arxiv(req.query)
+    results = ingestion.search_arxiv(req.query, max_results=req.max_results, year_from=req.year_from, year_to=req.year_to)
     return {"results": results}
 
 

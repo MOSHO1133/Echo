@@ -8,10 +8,16 @@ ARXIV_API = "http://export.arxiv.org/api/query"
 NS = {"atom": "http://www.w3.org/2005/Atom"}
 
 
-def search_arxiv(query, max_results=6):
-    params = {"search_query": f"all:{query}", "start": 0, "max_results": max_results}
+def search_arxiv(query, max_results=15, year_from=None, year_to=None):
+    search_query = f"all:{query}"
+    if year_from or year_to:
+        start_date = f"{year_from or '1990'}01010000"
+        end_date = f"{year_to or '2100'}12312359"
+        search_query += f" AND submittedDate:[{start_date} TO {end_date}]"
+
+    params = {"search_query": search_query, "start": 0, "max_results": max_results}
     try:
-        resp = requests.get(ARXIV_API, params=params, timeout=10)
+        resp = requests.get(ARXIV_API, params=params, timeout=15)
         resp.raise_for_status()
     except Exception as e:
         return {"error": f"arXiv search failed: {e}"}
