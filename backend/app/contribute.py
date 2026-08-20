@@ -1,4 +1,4 @@
-from . import db, embeddings, rag
+from . import db, embeddings, rag, relevance
 
 # Beyond this distance, the "closest" paper isn't actually related to the idea —
 # it's just the least-far option among unrelated papers. Embedding similarity
@@ -33,9 +33,9 @@ def match_idea(idea_text, library_ids, user_id, k=6):
             )
         }
 
-    if avg_distance < 0.6:
+    if avg_distance < relevance.HIGH_RELEVANCE_THRESHOLD:
         novelty = "Low novelty — closely overlaps with existing work in your library"
-    elif avg_distance < 1.0:
+    elif avg_distance < relevance.RELEVANT_THRESHOLD:
         novelty = "Medium novelty — partial overlap found"
     else:
         novelty = "High novelty — related, but little direct overlap found in your library"

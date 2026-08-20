@@ -12,7 +12,12 @@ CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
 def get_model():
     global _model
     if _model is None:
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        # device="cpu" explicitly avoids a known PyTorch/transformers issue
+        # where certain versions lazily place model weights on a 'meta'
+        # device during load, then fail with "Cannot copy out of meta
+        # tensor" when the library tries to move them. Forcing CPU placement
+        # up front sidesteps that entirely.
+        _model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
     return _model
 
 
@@ -20,7 +25,14 @@ def get_collection():
     global _client
     if _client is None:
         _client = chromadb.PersistentClient(path=CHROMA_PATH)
-    return _client.get_or_create_collection("chunks")
+    # Explicit cosine distance — Chroma defaults to raw L2 (Euclidean) if
+    # unspecified, which has an unpredictable range on un-normalized
+    # embeddings and breaks every relevance threshold in the app (they're
+    # all calibrated for cosine distance's predictable 0-2 range). This
+    # metadata only takes effect when the collection is FIRST created —
+    # if "chunks" already exists from before this fix, it must be deleted
+    # (see README/setup notes) so it gets recreated with this setting.
+    return _client.get_or_create_collection("chunks", metadata={"hnsw:space": "cosine"})
 
 
 def index_paper_chunks(paper_id, chunks, user_id):
@@ -40,27 +52,33 @@ def delete_paper_chunks(paper_id):
     coll.delete(where={"paper_id": paper_id})
 
 
-def query_chunks(query, k=5, paper_ids=None, user_id=None):
-    """user_id is required for any user-facing query — it's the hard boundary
-    that prevents one user's question from retrieving another user's chunks,
-    even if paper_ids were somehow guessed or reused."""
-    model = get_model()
-    coll = get_collection()
-    q_emb = model.encode([query]).tolist()
+def encode_query(query):
+    """Embeds a single query string. Exposed separately so callers that need
+    to run the SAME question against several different filters (e.g. one
+    query per paper) can encode once and reuse the vector, instead of paying
+    the encoding cost repeatedly."""
+    return get_model().encode([query]).tolist()
 
+
+def _build_where(paper_ids=None, user_id=None):
     conditions = []
     if user_id is not None:
         conditions.append({"user_id": user_id})
     if paper_ids:
         conditions.append({"paper_id": {"$in": paper_ids}})
-
     if len(conditions) == 0:
-        where = None
-    elif len(conditions) == 1:
-        where = conditions[0]
-    else:
-        where = {"$and": conditions}
+        return None
+    if len(conditions) == 1:
+        return conditions[0]
+    return {"$and": conditions}
 
+
+def query_chunks_by_vector(q_emb, k=5, paper_ids=None, user_id=None):
+    """Same retrieval as query_chunks, but takes an already-computed embedding
+    vector instead of re-encoding text — used when the same question needs to
+    be queried multiple times with different filters (e.g. per-paper)."""
+    coll = get_collection()
+    where = _build_where(paper_ids=paper_ids, user_id=user_id)
     res = coll.query(query_embeddings=q_emb, n_results=k, where=where)
     out = []
     docs = res.get("documents", [[]])[0]
@@ -69,3 +87,10 @@ def query_chunks(query, k=5, paper_ids=None, user_id=None):
     for doc, meta, dist in zip(docs, metas, dists):
         out.append({"text": doc, "paper_id": meta["paper_id"], "section": meta["section"], "distance": dist})
     return out
+
+
+def query_chunks(query, k=5, paper_ids=None, user_id=None):
+    """user_id is required for any user-facing query — it's the hard boundary
+    that prevents one user's question from retrieving another user's chunks,
+    even if paper_ids were somehow guessed or reused."""
+    return query_chunks_by_vector(encode_query(query), k=k, paper_ids=paper_ids, user_id=user_id)

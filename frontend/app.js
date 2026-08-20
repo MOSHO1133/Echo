@@ -5,6 +5,7 @@ let currentUser = null;
 
 let library = [];
 let selected = new Set();
+let libraryHealth = null;
 let currentPaperId = sessionStorage.getItem('echo_currentPaperId') || null;
 let chatHistory = {};
 let pollTimer = null;
@@ -97,8 +98,7 @@ function goTo(screenId) {
   if (screenId === 'compare') renderCompare();
   if (screenId === 'summaries') renderSummaries();
   if (screenId === 'library') renderLibrary();
-}
-document.querySelectorAll('.navitem').forEach(item => {
+} document.querySelectorAll('.navitem').forEach(item => {
   if (!item.classList.contains('disabled')) item.addEventListener('click', () => goTo(item.dataset.screen));
 });
 
@@ -146,7 +146,12 @@ async function addFromSearch(btn, paper) {
   if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
   showToast('Adding to library — full summary generates in the background');
   try {
-    await api('/library/add-from-search', { method: 'POST', body: JSON.stringify(paper) });
+    const result = await api('/library/add-from-search', { method: 'POST', body: JSON.stringify(paper) });
+    if (result.error) {
+      showToast(result.error);
+      if (btn) { btn.disabled = false; btn.textContent = '+ Add to library'; }
+      return;
+    }
     await refreshLibrary();
     renderSearchResults();
     showToast('Added! Summaries will fill in shortly.');
@@ -165,7 +170,8 @@ async function doUpload() {
   try {
     const res = await fetch(API + '/library/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + googleToken }, body: form });
     if (res.status === 401) { signOut(); return; }
-    if (!res.ok) throw new Error();
+    const data = await res.json();
+    if (data.error) { showToast(data.error); input.value = ''; return; }
     await refreshLibrary();
     showToast('Uploaded! Summaries will fill in shortly.');
   } catch (e) { showToast('Upload failed'); }
@@ -176,6 +182,7 @@ async function refreshLibrary() {
   const data = await api('/library');
   library = data.papers || [];
   library.forEach(p => selected.add(p.id));
+  try { libraryHealth = await api('/library/health'); } catch (e) { libraryHealth = null; }
   renderLibrary();
   renderSummaries();
   updateNavCount();
@@ -194,7 +201,10 @@ function renderLibrary() {
     el.innerHTML = `<div class="empty-state"><div class="big">Your library is empty</div>Search for papers or upload your own draft — only what you add shows up here.<br><button class="btn btn-primary" onclick="goTo('search')">Go to Search &amp; Upload</button></div>`;
     return;
   }
-  const toolbar = `<div class="lib-toolbar"><span>${library.length} paper(s) in your library · ${selected.size} selected</span>
+  const healthBadge = (libraryHealth && libraryHealth.score !== null && libraryHealth.score !== undefined)
+    ? `<span class="badge ${libraryHealth.score >= 65 ? 'reviewed' : (libraryHealth.score >= 35 ? 'preprint' : 'low')}" style="margin-left:10px;" title="${escapeHtml(libraryHealth.label)}"><span class="dot"></span>Diversity ${libraryHealth.score}%</span>`
+    : '';
+  const toolbar = `<div class="lib-toolbar"><span>${library.length}/5 papers in your library · ${selected.size} selected${healthBadge}</span>
     <div style="display:flex; gap:8px;"><button class="btn btn-ghost" onclick="goTo('compare')">Compare selected</button><button class="btn btn-primary" onclick="goTo('summaries')">View summaries</button></div></div>`;
   const grid = '<div class="lib-grid">' + library.map(p => {
     const isChecked = selected.has(p.id);
@@ -264,14 +274,17 @@ function renderPaper() {
     </div>
     <div class="chat-panel">
       <div class="chat-head">ASK ECHO ABOUT THIS PAPER</div>
+      <div style="display:flex; gap:6px; margin-bottom:12px;">
+        <button id="scopeBtnPaper" type="button" class="scope-btn active" onclick="setChatScope('paper')">This paper</button>
+        <button id="scopeBtnLibrary" type="button" class="scope-btn" onclick="setChatScope('library')">Whole library</button>
+      </div>
       <div class="chat-log" id="chatLog"></div>
       <div class="chat-input"><input type="text" id="chatInput" placeholder="Ask a question..." onkeydown="if(event.key==='Enter') sendChat()"><button class="btn btn-teal" onclick="sendChat()">Ask</button></div>
     </div>
   </div>`;
   renderChatLog();
-}
-
-function renderMarkdown(text) {
+  chatScope = 'paper';
+} function renderMarkdown(text) {
   if (!text) return '';
   let html = text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -282,13 +295,45 @@ function renderMarkdown(text) {
   return html;
 }
 
+let chatScope = 'paper'; // 'paper' = current paper only, 'library' = whole library, ranked by relevance
+
+function setChatScope(scope) {
+  chatScope = scope;
+  const paperBtn = document.getElementById('scopeBtnPaper');
+  const libBtn = document.getElementById('scopeBtnLibrary');
+  if (!paperBtn || !libBtn) return;
+  paperBtn.classList.toggle('active', scope === 'paper');
+  libBtn.classList.toggle('active', scope === 'library');
+  const chatInput = document.getElementById('chatInput');
+  if (chatInput) chatInput.focus();
+}
+
+function relevanceLabel(avgDistance) {
+  if (avgDistance < 0.6) return { text: 'Highly relevant', cls: 'reviewed' };
+  if (avgDistance < 1.0) return { text: 'Relevant', cls: 'preprint' };
+  return { text: 'Loosely relevant', cls: 'low' };
+}
+
 function renderChatLog() {
   const log = document.getElementById('chatLog');
   if (!log) return;
   const hist = chatHistory[currentPaperId] || [];
   log.innerHTML = hist.map(m => m.role === 'q'
     ? `<div class="bubble q">${escapeHtml(m.text)}</div>`
-    : `<div class="bubble">${m.pending ? m.text : renderMarkdown(m.text)}${(m.sources || []).map((s, i) => `<span class="src-chip">Source ${i + 1} · ${s.section}</span>`).join('')}</div>`
+    : `<div class="bubble">${m.pending ? m.text : renderMarkdown(m.text)}
+        ${(m.sources || []).map((s, i) => `<span class="src-chip">Source ${i + 1} · ${s.section}</span>`).join('')}
+        ${m.rankedPapers ? `<div style="margin-top:12px; border-top:1px solid #2E3542; padding-top:10px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; color:#9CA096; margin-bottom:8px;">MOST RELEVANT PAPERS IN YOUR LIBRARY</div>
+            ${m.rankedPapers.map((rp, i) => {
+      const rel = relevanceLabel(rp.avg_distance);
+      return `<div style="display:flex; align-items:center; gap:8px; margin-bottom:6px; cursor:pointer;" onclick="viewPaper('${rp.paper_id}')">
+                <span style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:#767A72;">${i + 1}.</span>
+                <span style="font-size:12.5px; flex:1; text-decoration:underline;">${escapeHtml(rp.title.slice(0, 55))}</span>
+                <span class="badge ${rel.cls}" style="margin:0;"><span class="dot"></span>${rel.text}</span>
+              </div>`;
+    }).join('')}
+          </div>` : ''}
+       </div>`
   ).join('');
   log.scrollTop = log.scrollHeight;
 }
@@ -305,9 +350,12 @@ async function sendChat() {
   chatHistory[currentPaperId].push({ role: 'a', text: '<span class="spinner" style="border-top-color:#fff;"></span>Thinking...', pending: true });
   renderChatLog();
   try {
-    const data = await api('/ask', { method: 'POST', body: JSON.stringify({ question: q, paper_ids: [currentPaperId] }) });
-    chatHistory[currentPaperId].pop(); // remove the pending placeholder
-    chatHistory[currentPaperId].push({ role: 'a', text: data.answer, sources: data.sources });
+    const body = { question: q };
+    if (chatScope === 'paper') body.paper_ids = [currentPaperId];
+    // chatScope === 'library': omit paper_ids entirely -> backend searches the whole library
+    const data = await api('/ask', { method: 'POST', body: JSON.stringify(body) });
+    chatHistory[currentPaperId].pop();
+    chatHistory[currentPaperId].push({ role: 'a', text: data.answer, sources: data.sources, rankedPapers: data.ranked_papers });
   } catch (e) {
     chatHistory[currentPaperId].pop();
     chatHistory[currentPaperId].push({ role: 'a', text: 'Something went wrong reaching Echo. Please try again.' });
@@ -370,6 +418,125 @@ async function analyzeIdea() {
       </div>
       <div class="card"><div class="field-label">How you could build on it</div><div class="field-body" style="margin-top:8px;">${renderMarkdown(data.guidance)}</div></div>`;
   } catch (e) { el.innerHTML = `<div class="empty-state">Something went wrong reaching Echo.</div>`; }
+}
+
+function relevanceBadgeFromDistance(dist) {
+  if (dist === null || dist === undefined) {
+    return `<span class="badge low" style="margin:0;"><span class="dot"></span>No evidence found</span>`;
+  }
+  const rel = relevanceLabel(dist);
+  return `<span class="badge ${rel.cls}" style="margin:0;" title="distance ${dist.toFixed(3)}"><span class="dot"></span>${rel.text}</span>`;
+}
+
+async function runAnalysis() {
+  const q = document.getElementById('analyzeInput').value.trim();
+  const el = document.getElementById('analyzeResult');
+  if (!q) return;
+  el.innerHTML = `<div class="empty-state"><span class="spinner" style="border-color:rgba(20,24,31,.2); border-top-color:var(--ink);"></span>Analyzing your library...</div>`;
+  try {
+    const data = await api('/analyze', { method: 'POST', body: JSON.stringify({ question: q }) });
+    if (data.error) { el.innerHTML = `<div class="empty-state">${escapeHtml(data.error)}</div>`; return; }
+    el.innerHTML = renderAnalysisResult(data);
+  } catch (e) {
+    el.innerHTML = `<div class="empty-state">Something went wrong reaching Echo.</div>`;
+  }
+}
+
+function renderAnalysisResult(data) {
+  const titles = data.titles || {};
+  const paperIds = Object.keys(titles);
+  let html = '';
+
+  // 1) Overall ranked papers
+  html += `<div class="card"><div class="eyebrow">Papers ranked by overall relevance</div>`;
+  if (!data.ranked_overall || data.ranked_overall.length === 0) {
+    html += `<div class="field-body" style="margin-top:8px;">No relevant content found for this question.</div>`;
+  } else {
+    html += data.ranked_overall.map(([pid, dist], i) => `
+      <div style="display:flex; align-items:center; gap:10px; margin:10px 0; cursor:pointer;" onclick="viewPaper('${pid}')">
+        <span style="font-family:'IBM Plex Mono',monospace; color:#767A72; font-size:12px;">${i + 1}.</span>
+        <span style="flex:1; text-decoration:underline; font-size:13.5px;">${escapeHtml((titles[pid] || pid).slice(0, 60))}</span>
+        ${relevanceBadgeFromDistance(dist)}
+      </div>`).join('');
+  }
+  html += `</div>`;
+
+  // 2) Section leaderboards — "which paper's Methodology/Findings/etc is most relevant"
+  const catEntries = Object.entries(data.section_leaders || {});
+  html += `<div class="card"><div class="eyebrow">Most relevant paper, by section</div>`;
+  if (catEntries.length === 0) {
+    html += `<div class="field-body" style="margin-top:8px;">No section-level matches found.</div>`;
+  } else {
+    html += catEntries.map(([cat, ranked]) => {
+      const top = ranked[0];
+      return `<div style="margin:12px 0; padding-bottom:12px; border-bottom:1px solid var(--line);">
+          <div class="field-label">${escapeHtml(cat)}</div>
+          <div style="display:flex; align-items:center; gap:10px; margin-top:5px; cursor:pointer;" onclick="viewPaper('${top[0]}')">
+            <span style="flex:1; text-decoration:underline; font-size:13.5px;">${escapeHtml((titles[top[0]] || top[0]).slice(0, 55))}</span>
+            ${relevanceBadgeFromDistance(top[1])}
+          </div>
+        </div>`;
+    }).join('');
+  }
+  html += `</div>`;
+
+  // 3) Heatmap: papers x sections — pure CSS grid, no external chart library
+  const categories = Object.keys(data.section_leaders || {});
+  if (categories.length && paperIds.length) {
+    const colWidth = 92;
+    html += `<div class="card"><div class="eyebrow">Relevance heatmap</div>
+      <div style="overflow-x:auto; margin-top:12px;">
+        <div style="display:grid; grid-template-columns: 150px repeat(${categories.length}, ${colWidth}px); gap:4px; min-width:${150 + categories.length * (colWidth + 4)}px;">
+          <div></div>
+          ${categories.map(c => `<div style="font-family:'IBM Plex Mono',monospace; font-size:9px; text-align:center; color:var(--ink-soft); align-self:end; padding-bottom:5px; line-height:1.2;">${escapeHtml(c)}</div>`).join('')}
+          ${paperIds.map(pid => {
+      const scores = data.paper_section_scores[pid] || {};
+      const rowLabel = `<div style="font-size:12px; padding:6px 4px; display:flex; align-items:center;">${escapeHtml((titles[pid] || pid).slice(0, 20))}</div>`;
+      const cells = categories.map(c => {
+        const dist = scores[c];
+        let bg = '#ECECE4', label = '—';
+        if (dist !== undefined) {
+          if (dist < 0.6) { bg = '#2F6F6B'; }
+          else if (dist < 1.0) { bg = '#C48A2E'; }
+          else { bg = '#B4432E'; }
+          label = dist.toFixed(2);
+        }
+        return `<div title="${escapeHtml(c)}: ${dist !== undefined ? dist.toFixed(3) : 'no matching content'}" style="background:${bg}; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-family:'IBM Plex Mono',monospace;">${label}</div>`;
+      }).join('');
+      return rowLabel + cells;
+    }).join('')}
+        </div>
+      </div>
+      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Darker teal = highly relevant · amber = relevant · red = present but weak · gray = no matching content found. Lower number = closer match.</div>
+    </div>`;
+  }
+
+  // 4) Sub-topic coverage
+  const subtopics = data.subtopics || [];
+  if (subtopics.length) {
+    const colWidth = 100;
+    html += `<div class="card"><div class="eyebrow">Sub-topic coverage</div>
+      <div style="overflow-x:auto; margin-top:12px;">
+        <div style="display:grid; grid-template-columns: 170px repeat(${paperIds.length}, ${colWidth}px); gap:4px; min-width:${170 + paperIds.length * (colWidth + 4)}px;">
+          <div></div>
+          ${paperIds.map(pid => `<div style="font-size:10.5px; text-align:center; color:var(--ink-soft); align-self:end; padding-bottom:5px; line-height:1.2;">${escapeHtml((titles[pid] || pid).slice(0, 16))}</div>`).join('')}
+          ${subtopics.map(st => {
+      const row = data.coverage[st] || {};
+      const rowLabel = `<div style="font-size:12px; padding:6px 4px; display:flex; align-items:center;">${escapeHtml(st)}</div>`;
+      const cells = paperIds.map(pid => {
+        const dist = row[pid];
+        const covered = dist !== null && dist !== undefined && dist < 1.0;
+        return `<div style="display:flex; align-items:center; justify-content:center; height:32px; font-size:16px;" title="${dist !== null && dist !== undefined ? dist.toFixed(3) : 'no evidence'}">${covered ? '✅' : '—'}</div>`;
+      }).join('');
+      return rowLabel + cells;
+    }).join('')}
+        </div>
+      </div>
+      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Sub-topics are auto-derived from your question. ✅ = at least one paper chunk closely matched that sub-topic.</div>
+    </div>`;
+  }
+
+  return html;
 }
 
 async function openReader(id) {

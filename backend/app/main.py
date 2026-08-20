@@ -11,7 +11,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 
-from . import contribute, db, embeddings, ingestion, processing, rag, summarize
+from . import analysis, contribute, db, embeddings, ingestion, processing, rag, summarize
 
 app = FastAPI(title="Echo API")
 
@@ -144,8 +144,22 @@ def search(req: SearchReq):
     return {"results": results}
 
 
+MAX_LIBRARY_PAPERS = 5
+
+
+def _library_count(user_id):
+    conn = db.get_conn()
+    count = conn.execute(
+        "SELECT COUNT(*) as c FROM papers WHERE in_library=1 AND user_id=?", (user_id,)
+    ).fetchone()["c"]
+    conn.close()
+    return count
+
+
 @app.post("/library/add-from-search")
 def add_from_search(req: AddFromSearchReq, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    if _library_count(user["id"]) >= MAX_LIBRARY_PAPERS:
+        return {"error": f"Library limit reached ({MAX_LIBRARY_PAPERS} papers). Remove a paper before adding another."}
     paper_id = req.id or str(uuid.uuid4())
     full_text = ingestion.fetch_arxiv_full_text(req.pdf_url) if req.pdf_url else ""
     if not full_text:
@@ -160,6 +174,8 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 @app.post("/library/upload")
 async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...), user=Depends(get_current_user)):
+    if _library_count(user["id"]) >= MAX_LIBRARY_PAPERS:
+        return {"error": f"Library limit reached ({MAX_LIBRARY_PAPERS} papers). Remove a paper before adding another."}
     if file.content_type != "application/pdf":
         return {"error": "Only PDF files are accepted."}
     content = await file.read()
@@ -265,3 +281,39 @@ def feedback(req: FeedbackReq, user=Depends(get_current_user)):
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+def _owned_library_rows(user_id):
+    conn = db.get_conn()
+    rows = conn.execute(
+        "SELECT id, title, methodology, findings FROM papers WHERE in_library=1 AND user_id=?", (user_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/analyze")
+def analyze(req: AskReq, user=Depends(get_current_user)):
+    """Structural analysis of the user's library against a question: which
+    papers (and which SECTIONS of them) are most relevant, which sub-topics
+    of the question are covered vs. missing, all computed locally via
+    embeddings — costs exactly one LLM call (question decomposition), not
+    one per paper, so it stays cheap regardless of library size."""
+    if not _check_rate_limit(user["id"], "analyze"):
+        return {"error": "Rate limit reached — please wait a minute and try again."}
+
+    owned_papers = _owned_library_rows(user["id"])
+    if not owned_papers:
+        return {"error": "Add papers to your library first."}
+
+    result = analysis.analyze_library(req.question, owned_papers, user["id"])
+    result["titles"] = {p["id"]: p["title"] for p in owned_papers}
+    return result
+
+
+@app.get("/library/health")
+def library_health(user=Depends(get_current_user)):
+    """Static diversity score for the user's current library — no question
+    needed, no LLM call, purely local embedding comparison."""
+    owned_papers = _owned_library_rows(user["id"])
+    return analysis.library_diversity(owned_papers)
