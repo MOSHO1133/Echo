@@ -35,11 +35,12 @@ def _extract_field_fallback(text, field):
     return "Could not parse model response for this field."
 
 
-def summarize_paper(paper_id):
+def summarize_paper(paper_id, user_id):
     chunks = embeddings.query_chunks(
         "methodology findings limitations future work research gap",
         k=8,
         paper_ids=[paper_id],
+        user_id=user_id,
     )
 
     if not chunks:

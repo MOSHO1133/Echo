@@ -1,5 +1,8 @@
 const API = window.ECHO_API_BASE || 'http://localhost:8000';
 
+let googleToken = sessionStorage.getItem('echo_google_token') || null;
+let currentUser = null;
+
 let library = [];
 let selected = new Set();
 let currentPaperId = sessionStorage.getItem('echo_currentPaperId') || null;
@@ -13,8 +16,72 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2600);
 }
 
+// --- Google Sign-In ---------------------------------------------------------
+
+function decodeJwtPayload(token) {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(decodeURIComponent(atob(base64).split('').map(c =>
+      '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)
+    ).join('')));
+  } catch (e) { return null; }
+}
+
+function handleCredentialResponse(response) {
+  googleToken = response.credential;
+  sessionStorage.setItem('echo_google_token', googleToken);
+  currentUser = decodeJwtPayload(googleToken);
+  showApp();
+}
+
+function signOut() {
+  sessionStorage.removeItem('echo_google_token');
+  sessionStorage.removeItem('echo_currentPaperId');
+  googleToken = null;
+  currentUser = null;
+  library = [];
+  if (window.google && google.accounts && google.accounts.id) {
+    google.accounts.id.disableAutoSelect();
+  }
+  showAuthGate();
+}
+
+function showAuthGate() {
+  document.getElementById('authGate').style.display = 'flex';
+  if (window.google && google.accounts && google.accounts.id && window.GOOGLE_CLIENT_ID) {
+    google.accounts.id.initialize({ client_id: window.GOOGLE_CLIENT_ID, callback: handleCredentialResponse });
+    google.accounts.id.renderButton(document.getElementById('googleSignInDiv'), { theme: 'filled_black', size: 'large', shape: 'pill' });
+  } else {
+    // Google's script loads async — it may not be ready yet on first call.
+    setTimeout(showAuthGate, 200);
+  }
+}
+
+function showApp() {
+  document.getElementById('authGate').style.display = 'none';
+  const badge = document.getElementById('userBadge');
+  if (currentUser) {
+    badge.innerHTML = `Signed in as <strong>${escapeHtml(currentUser.name || currentUser.email || 'User')}</strong><br><span style="cursor:pointer; text-decoration:underline;" onclick="signOut()">Sign out</span>`;
+  }
+  refreshLibrary().catch(() => showToast('Could not reach the Echo API — is the backend running?'));
+}
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 async function api(path, opts = {}) {
-  const res = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  const res = await fetch(API + path, {
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + googleToken },
+    ...opts,
+  });
+  if (res.status === 401) {
+    signOut();
+    throw new Error('Session expired — please sign in again');
+  }
   if (!res.ok) { throw new Error('API error ' + res.status); }
   return res.json();
 }
@@ -64,8 +131,8 @@ function renderSearchResults() {
   el.innerHTML = results.map(p => {
     const added = library.some(lp => lp.id === p.id || lp.title === p.title);
     return `<div class="card"><div class="card-top"><div>
-      <div class="paper-title">${p.title}</div>
-      <div class="paper-meta">${(p.authors || []).join(', ')} · ${p.year} · ${p.venue}</div>
+      <div class="paper-title">${escapeHtml(p.title)}</div>
+      <div class="paper-meta">${escapeHtml((p.authors || []).join(', '))} · ${escapeHtml(p.year)} · ${escapeHtml(p.venue)}</div>
       <span class="badge preprint"><span class="dot"></span>arXiv</span>
     </div></div>
     <div class="card-actions">
@@ -96,7 +163,8 @@ async function doUpload() {
   form.append('file', input.files[0]);
   showToast('Uploading and processing PDF...');
   try {
-    const res = await fetch(API + '/library/upload', { method: 'POST', body: form });
+    const res = await fetch(API + '/library/upload', { method: 'POST', headers: { 'Authorization': 'Bearer ' + googleToken }, body: form });
+    if (res.status === 401) { signOut(); return; }
     if (!res.ok) throw new Error();
     await refreshLibrary();
     showToast('Uploaded! Summaries will fill in shortly.');
@@ -133,8 +201,8 @@ function renderLibrary() {
     return `<div class="card">
       <div class="remove-btn" onclick="removeFromLibrary('${p.id}')" title="Remove">✕</div>
       <div class="check ${isChecked ? 'checked' : ''}" onclick="toggleSelect('${p.id}')" title="Select for compare"></div>
-      <div class="paper-title" style="font-size:15px; padding-right:50px;">${p.title}</div>
-      <div class="paper-meta">${p.authors || ''} ${p.year ? '· ' + p.year : ''}</div>
+      <div class="paper-title" style="font-size:15px; padding-right:50px;">${escapeHtml(p.title)}</div>
+      <div class="paper-meta">${escapeHtml(p.authors || '')} ${p.year ? '· ' + escapeHtml(p.year) : ''}</div>
       ${p.methodology ? '' : '<div class="paper-meta" style="color:#b8860b;">Summarizing...</div>'}
       <div class="card-actions"><button class="btn btn-ghost btn-sm" onclick="viewPaper('${p.id}')">View &amp; Ask</button><button class="btn btn-ghost btn-sm" onclick="openReader('${p.id}')">Read full paper</button>${pdfLinkHtml(p)}</div>
     </div>`;
@@ -183,7 +251,7 @@ function renderPaper() {
   if (!chatHistory[p.id]) chatHistory[p.id] = [];
   const switcher = library.length > 1
     ? `<select onchange="viewPaper(this.value)" style="margin:-6px 0 16px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); font-family:'Inter',sans-serif; font-size:13px; background:#fff;">
-        ${library.map(lp => `<option value="${lp.id}" ${lp.id === p.id ? 'selected' : ''}>${lp.title.slice(0, 60)}</option>`).join('')}
+        ${library.map(lp => `<option value="${lp.id}" ${lp.id === p.id ? 'selected' : ''}>${escapeHtml(lp.title.slice(0, 60))}</option>`).join('')}
       </select>`
     : '';
   content.innerHTML = `${switcher}<div class="card-actions" style="margin:-10px 0 18px;"><button class="btn btn-ghost btn-sm" onclick="openReader('${p.id}')">Read full paper</button>${pdfLinkHtml(p)}</div>
@@ -219,7 +287,7 @@ function renderChatLog() {
   if (!log) return;
   const hist = chatHistory[currentPaperId] || [];
   log.innerHTML = hist.map(m => m.role === 'q'
-    ? `<div class="bubble q">${m.text}</div>`
+    ? `<div class="bubble q">${escapeHtml(m.text)}</div>`
     : `<div class="bubble">${m.pending ? m.text : renderMarkdown(m.text)}${(m.sources || []).map((s, i) => `<span class="src-chip">Source ${i + 1} · ${s.section}</span>`).join('')}</div>`
   ).join('');
   log.scrollTop = log.scrollHeight;
@@ -258,8 +326,8 @@ function renderCompare() {
     return;
   }
   const fields = [['methodology', 'Methodology'], ['findings', 'Findings'], ['research_gap', 'Research gap'], ['future_work', 'Future work']];
-  let html = `<table class="compare"><tr><th></th>${rows.map(p => `<th>${p.title.slice(0, 30)}</th>`).join('')}</tr>`;
-  fields.forEach(([key, label]) => { html += `<tr><td><strong>${label}</strong></td>${rows.map(p => `<td>${p[key] || '—'}</td>`).join('')}</tr>`; });
+  let html = `<table class="compare"><tr><th></th>${rows.map(p => `<th>${escapeHtml(p.title.slice(0, 30))}</th>`).join('')}</tr>`;
+  fields.forEach(([key, label]) => { html += `<tr><td><strong>${label}</strong></td>${rows.map(p => `<td>${renderMarkdown(p[key]) || '—'}</td>`).join('')}</tr>`; });
   html += '</table>';
   el.innerHTML = html;
 }
@@ -271,11 +339,11 @@ function renderSummaries() {
     return;
   }
   el.innerHTML = library.map(p => `<div class="card">
-      <div class="paper-title" style="font-size:16px;">${p.title}</div>
-      <div class="sum-row"><span class="field-label">Methodology</span><span>${p.methodology || 'Processing...'}</span></div>
-      <div class="sum-row"><span class="field-label">Findings</span><span>${p.findings || 'Processing...'}</span></div>
-      <div class="sum-row"><span class="field-label">Research gap</span><span><span class="gap-highlight">${p.research_gap || 'Processing...'}</span></span></div>
-      <div class="sum-row"><span class="field-label">Future work</span><span>${p.future_work || 'Processing...'}</span></div>
+      <div class="paper-title" style="font-size:16px;">${escapeHtml(p.title)}</div>
+      <div class="sum-row"><span class="field-label">Methodology</span><span>${renderMarkdown(p.methodology) || 'Processing...'}</span></div>
+      <div class="sum-row"><span class="field-label">Findings</span><span>${renderMarkdown(p.findings) || 'Processing...'}</span></div>
+      <div class="sum-row"><span class="field-label">Research gap</span><span><span class="gap-highlight">${renderMarkdown(p.research_gap) || 'Processing...'}</span></span></div>
+      <div class="sum-row"><span class="field-label">Future work</span><span>${renderMarkdown(p.future_work) || 'Processing...'}</span></div>
       <div class="card-actions"><button class="btn btn-ghost btn-sm" onclick="openReader('${p.id}')">Read full paper</button><button class="btn btn-ghost btn-sm" onclick="viewPaper('${p.id}')">Ask about this</button>${pdfLinkHtml(p)}</div>
     </div>`).join('');
 }
@@ -296,11 +364,11 @@ async function analyzeIdea() {
     else if (data.novelty.startsWith('Medium')) noveltyClass = 'preprint';
     el.innerHTML = `<div class="card">
         <div class="eyebrow">Most relevant paper in your library</div>
-        <div class="paper-title">${data.title}</div>
+        <div class="paper-title">${escapeHtml(data.title)}</div>
         <span class="badge ${noveltyClass}"><span class="dot"></span>${data.novelty}</span>
         <div class="card-actions"><button class="btn btn-ghost btn-sm" onclick="viewPaper('${data.paper_id}')">Open this paper</button></div>
       </div>
-      <div class="card"><div class="field-label">How you could build on it</div><div class="field-body" style="margin-top:8px; white-space:pre-wrap;">${data.guidance}</div></div>`;
+      <div class="card"><div class="field-label">How you could build on it</div><div class="field-body" style="margin-top:8px;">${renderMarkdown(data.guidance)}</div></div>`;
   } catch (e) { el.innerHTML = `<div class="empty-state">Something went wrong reaching Echo.</div>`; }
 }
 
@@ -320,4 +388,11 @@ function updateNavCount() {
   badge.classList.toggle('show', library.length > 0);
 }
 
-refreshLibrary().catch(() => showToast('Could not reach the Echo API — start the backend first.'));
+// App boot: show the Google sign-in gate if there's no stored session,
+// otherwise restore the session and load the user's library directly.
+if (googleToken) {
+  currentUser = decodeJwtPayload(googleToken);
+  showApp();
+} else {
+  showAuthGate();
+}

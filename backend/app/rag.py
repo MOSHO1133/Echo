@@ -14,7 +14,7 @@ client = OpenAI(
     api_key=os.getenv("GROQ_API_KEY"),
     base_url="https://api.groq.com/openai/v1",
 )
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 MAX_RETRIES = 4
 BASE_DELAY_SECONDS = 15  # Gemini free tier resets per-minute; steps stay well clear of it.
@@ -81,9 +81,10 @@ def build_context(chunks, titles):
     return "\n\n".join(parts)
 
 
-def ask(question, paper_ids=None, k=6):
-    """The one retrieve-and-generate function every AI feature in Echo calls."""
-    chunks = embeddings.query_chunks(question, k=k, paper_ids=paper_ids)
+def ask(question, paper_ids=None, user_id=None, k=6):
+    """The one retrieve-and-generate function every AI feature in Echo calls.
+    user_id scopes retrieval so a user can only ever retrieve their own chunks."""
+    chunks = embeddings.query_chunks(question, k=k, paper_ids=paper_ids, user_id=user_id)
     if not chunks:
         return {"answer": "No indexed content found for this scope yet.", "sources": []}
 

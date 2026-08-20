@@ -9,13 +9,13 @@ from . import db, embeddings, rag
 NO_MATCH_THRESHOLD = 1.3
 
 
-def match_idea(idea_text, library_ids, k=6):
+def match_idea(idea_text, library_ids, user_id, k=6):
     """Real embedding-similarity matching (not keyword overlap) against the
     user's library, then a second RAG call for concrete guidance."""
     if not library_ids:
         return None
 
-    chunks = embeddings.query_chunks(idea_text, k=k, paper_ids=library_ids)
+    chunks = embeddings.query_chunks(idea_text, k=k, paper_ids=library_ids, user_id=user_id)
     if not chunks:
         return None
 
@@ -45,7 +45,7 @@ def match_idea(idea_text, library_ids, k=6):
         "Based on this paper's research gap and limitations, give exactly 3 concise, "
         "concrete, numbered suggestions for how they could build on or extend it."
     )
-    guidance = rag.ask(guidance_question, paper_ids=[best_id], k=4)
+    guidance = rag.ask(guidance_question, paper_ids=[best_id], user_id=user_id, k=4)
 
     conn = db.get_conn()
     row = conn.execute("SELECT title FROM papers WHERE id=?", (best_id,)).fetchone()

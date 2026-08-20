@@ -9,6 +9,8 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,500;0,600;1,500&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
     rel="stylesheet">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>window.GOOGLE_CLIENT_ID = '965907288447-s40uhhr8a3182rg29cd71uqf13ng6hhf.apps.googleusercontent.com';</script>
   <style>
     :root {
       --ink: #14181F;
@@ -800,6 +802,151 @@
         grid-template-columns: 1fr;
       }
     }
+
+    /* --- Auth gate: an immersive "signal" moment, distinct from the working
+     screens. Rings pulse outward from the mark like an active echo/sonar
+     scan — literal to the product name rather than decorative. --- */
+    #authGate {
+      background:
+        radial-gradient(ellipse 60% 50% at 50% 42%, rgba(217, 232, 92, 0.06), transparent 70%),
+        radial-gradient(ellipse 100% 80% at 50% 100%, #1B212C, var(--ink) 60%);
+      overflow: hidden;
+    }
+
+    .auth-rings {
+      position: absolute;
+      top: 38%;
+      left: 50%;
+      width: 1px;
+      height: 1px;
+      pointer-events: none;
+    }
+
+    .auth-ring {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 120px;
+      height: 120px;
+      margin: -60px 0 0 -60px;
+      border-radius: 50%;
+      border: 1px solid var(--highlighter);
+      animation: authPing 3.6s cubic-bezier(.2, .6, .35, 1) infinite;
+      opacity: 0;
+    }
+
+    .auth-ring:nth-child(2) {
+      animation-delay: 1.2s;
+    }
+
+    .auth-ring:nth-child(3) {
+      animation-delay: 2.4s;
+    }
+
+    @keyframes authPing {
+      0% {
+        transform: scale(.4);
+        opacity: .55;
+      }
+
+      70% {
+        opacity: .08;
+      }
+
+      100% {
+        transform: scale(4.2);
+        opacity: 0;
+      }
+    }
+
+    .auth-mark {
+      position: relative;
+      z-index: 2;
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .auth-wordmark {
+      position: relative;
+      z-index: 2;
+      font-family: 'Fraunces', serif;
+      font-weight: 600;
+      font-size: 44px;
+      letter-spacing: -0.02em;
+      color: #F4F5EF;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    .auth-tagline {
+      position: relative;
+      z-index: 2;
+      font-family: 'IBM Plex Mono', monospace;
+      font-size: 11.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--highlighter);
+      text-align: center;
+      margin-bottom: 52px;
+    }
+
+    .auth-highlights {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      gap: 36px;
+      margin-bottom: 48px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 640px;
+    }
+
+    .auth-highlight {
+      max-width: 170px;
+    }
+
+    .auth-highlight .eyebrow {
+      color: var(--highlighter);
+      margin-bottom: 5px;
+    }
+
+    .auth-highlight p {
+      font-family: 'Inter', sans-serif;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: #B9BCB2;
+      margin: 0;
+    }
+
+    .auth-signin-card {
+      position: relative;
+      z-index: 2;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      border-radius: 16px;
+      padding: 26px 30px;
+      box-shadow: 0 0 0 1px rgba(217, 232, 92, 0.05), 0 24px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .auth-footnote {
+      position: relative;
+      z-index: 2;
+      margin-top: 22px;
+      font-size: 11.5px;
+      color: #5C6158;
+      text-align: center;
+    }
+
+    @media (prefers-reduced-motion:reduce) {
+      .auth-ring {
+        animation: none;
+        opacity: 0;
+      }
+    }
   </style>
 </head>
 
@@ -850,7 +997,7 @@
           <line x1="14" y1="10" x2="17" y2="10" stroke="currentColor" stroke-width="1.4" />
         </svg>Contribute</div>
     </nav>
-    <div class="sidebar-foot">Connected to your local Echo API.</div>
+    <div class="sidebar-foot" id="userBadge">Connected to your local Echo API.</div>
   </aside>
 
   <main>
@@ -862,11 +1009,14 @@
         <div class="screen-sub">Searches arXiv live. Only what you add here ends up in your library.</div>
       </div>
       <div class="searchbar">
-        <input type="text" id="searchInput" placeholder="e.g. flood prediction deep learning">
+        <input type="text" id="searchInput" placeholder="e.g. flood prediction deep learning"
+          onkeydown="if(event.key==='Enter') doSearch()">
         <input type="number" id="yearFrom" placeholder="Year from"
-          style="width:110px; padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px;">
+          style="width:110px; padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px;"
+          onkeydown="if(event.key==='Enter') doSearch()">
         <input type="number" id="yearTo" placeholder="Year to"
-          style="width:110px; padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px;">
+          style="width:110px; padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px;"
+          onkeydown="if(event.key==='Enter') doSearch()">
         <select id="resultCount"
           style="padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px; background:#fff;">
           <option value="10">10 results</option>
@@ -931,7 +1081,8 @@
       <div class="card">
         <div class="field-label">Your idea or contribution</div>
         <textarea id="ideaInput" class="idea-box" rows="4"
-          placeholder="e.g. I want to improve flood detection by combining drone-based capture with SAR imagery and a transformer model for near real-time inference."></textarea>
+          placeholder="e.g. I want to improve flood detection by combining drone-based capture with SAR imagery and a transformer model for near real-time inference."
+          onkeydown="if(event.key==='Enter' && !event.shiftKey){ event.preventDefault(); analyzeIdea(); }"></textarea>
         <div class="card-actions"><button class="btn btn-primary" onclick="analyzeIdea()">Find relevant paper &amp; get
             guidance</button></div>
       </div>
@@ -951,7 +1102,46 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="app.js"></script>
+  <div id="authGate"
+    style="position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:100; flex-direction:column; padding:24px;">
+    <div class="auth-rings">
+      <div class="auth-ring"></div>
+      <div class="auth-ring"></div>
+      <div class="auth-ring"></div>
+    </div>
+
+    <div class="auth-mark">
+      <svg width="52" height="52" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3" fill="var(--highlighter)" />
+        <circle cx="12" cy="12" r="7.5" fill="none" stroke="var(--highlighter)" stroke-width="1.3" opacity=".6" />
+        <circle cx="12" cy="12" r="11" fill="none" stroke="var(--highlighter)" stroke-width="1" opacity=".3" />
+      </svg>
+    </div>
+    <div class="auth-wordmark">echo</div>
+    <div class="auth-tagline">AI research assistant · signal in, insight out</div>
+
+    <div class="auth-highlights">
+      <div class="auth-highlight">
+        <div class="eyebrow">01 · Search</div>
+        <p>Pull live papers from arXiv, or upload your own draft.</p>
+      </div>
+      <div class="auth-highlight">
+        <div class="eyebrow">02 · Understand</div>
+        <p>Grounded summaries and cited answers — nothing invented.</p>
+      </div>
+      <div class="auth-highlight">
+        <div class="eyebrow">03 · Contribute</div>
+        <p>Find where your idea fits in the literature, and what's missing.</p>
+      </div>
+    </div>
+
+    <div class="auth-signin-card">
+      <div id="googleSignInDiv"></div>
+    </div>
+    <div class="auth-footnote">Your library is private to your account.</div>
+  </div>
+
+  <script src="app.js?v=4"></script>
 </body>
 
 </html>

@@ -12,7 +12,6 @@ CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
 def get_model():
     global _model
     if _model is None:
-        # Downloads weights from huggingface.co on first run — needs normal internet access.
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
@@ -24,7 +23,7 @@ def get_collection():
     return _client.get_or_create_collection("chunks")
 
 
-def index_paper_chunks(paper_id, chunks):
+def index_paper_chunks(paper_id, chunks, user_id):
     if not chunks:
         return
     model = get_model()
@@ -32,7 +31,7 @@ def index_paper_chunks(paper_id, chunks):
     texts = [c["text"] for c in chunks]
     vectors = model.encode(texts).tolist()
     ids = [f"{paper_id}__{i}" for i in range(len(chunks))]
-    metadatas = [{"paper_id": paper_id, "section": c["section"]} for c in chunks]
+    metadatas = [{"paper_id": paper_id, "section": c["section"], "user_id": user_id} for c in chunks]
     coll.add(ids=ids, embeddings=vectors, documents=texts, metadatas=metadatas)
 
 
@@ -41,11 +40,27 @@ def delete_paper_chunks(paper_id):
     coll.delete(where={"paper_id": paper_id})
 
 
-def query_chunks(query, k=5, paper_ids=None):
+def query_chunks(query, k=5, paper_ids=None, user_id=None):
+    """user_id is required for any user-facing query — it's the hard boundary
+    that prevents one user's question from retrieving another user's chunks,
+    even if paper_ids were somehow guessed or reused."""
     model = get_model()
     coll = get_collection()
     q_emb = model.encode([query]).tolist()
-    where = {"paper_id": {"$in": paper_ids}} if paper_ids else None
+
+    conditions = []
+    if user_id is not None:
+        conditions.append({"user_id": user_id})
+    if paper_ids:
+        conditions.append({"paper_id": {"$in": paper_ids}})
+
+    if len(conditions) == 0:
+        where = None
+    elif len(conditions) == 1:
+        where = conditions[0]
+    else:
+        where = {"$and": conditions}
+
     res = coll.query(query_embeddings=q_emb, n_results=k, where=where)
     out = []
     docs = res.get("documents", [[]])[0]

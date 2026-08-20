@@ -1,17 +1,52 @@
 import datetime
+import os
+import time
 import uuid
+from collections import defaultdict
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+from pydantic import BaseModel, Field
 
 from . import contribute, db, embeddings, ingestion, processing, rag, summarize
 
 app = FastAPI(title="Echo API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+allowed_origins = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5500,http://127.0.0.1:5500"
+).split(",")
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=["*"], allow_headers=["*"])
 
 db.init_db()
+
+# --- Google authentication -------------------------------------------------
+# Every route (except /health) requires a valid Google ID token in the
+# Authorization header: "Authorization: Bearer <token>". The token is
+# verified against Google's public keys (no secret needed on our side).
+# The verified 'sub' claim becomes the user's permanent user_id, used to
+# scope every database and vector-store query so users can never see or
+# retrieve each other's data.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+
+
+def get_current_user(authorization: str = Header(default=None)):
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Server misconfigured: GOOGLE_CLIENT_ID not set.")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header.")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        idinfo = id_token.verify_oauth2_token(token, google_requests.Request(), GOOGLE_CLIENT_ID)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired Google token.")
+
+    user_id = idinfo["sub"]
+    db.upsert_user(user_id, idinfo.get("email"), idinfo.get("name"), idinfo.get("picture"))
+    return {"id": user_id, "email": idinfo.get("email"), "name": idinfo.get("name"), "picture": idinfo.get("picture")}
 
 
 class SearchReq(BaseModel):
@@ -22,7 +57,7 @@ class SearchReq(BaseModel):
 
 
 class AskReq(BaseModel):
-    question: str
+    question: str = Field(..., max_length=2000)
     paper_ids: Optional[List[str]] = None
 
 
@@ -31,7 +66,7 @@ class CompareReq(BaseModel):
 
 
 class ContribReq(BaseModel):
-    idea: str
+    idea: str = Field(..., max_length=2000)
     paper_ids: List[str]
 
 
@@ -53,27 +88,28 @@ class AddFromSearchReq(BaseModel):
     pdf_url: str = ""
 
 
-def _store_paper(paper_id, title, authors, year, venue, source, doi, pdf_url, full_text):
+def _store_paper(paper_id, user_id, title, authors, year, venue, source, doi, pdf_url, full_text):
     conn = db.get_conn()
     conn.execute(
         """INSERT OR REPLACE INTO papers
-           (id, title, authors, year, venue, source, doi, pdf_url, tags, full_text, in_library, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
-        (paper_id, title, authors, year, venue, source, doi, pdf_url, "", full_text, datetime.datetime.now(datetime.UTC).isoformat()),
+           (id, user_id, title, authors, year, venue, source, doi, pdf_url, tags, full_text, in_library, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+        (paper_id, user_id, title, authors, year, venue, source, doi, pdf_url, "", full_text,
+         datetime.datetime.now(datetime.UTC).isoformat()),
     )
     conn.commit()
     conn.close()
 
 
-def _index_and_summarize(paper_id, full_text):
+def _index_and_summarize(paper_id, user_id, full_text):
     """Runs in the background after the paper row already exists, so a
     summarization failure never hides the paper from the library."""
     try:
         sections = processing.detect_sections(full_text)
         chunks = processing.chunk_sections(sections)
-        embeddings.index_paper_chunks(paper_id, chunks)
+        embeddings.index_paper_chunks(paper_id, chunks, user_id)
         if chunks:
-            summarize.summarize_paper(paper_id)
+            summarize.summarize_paper(paper_id, user_id)
     except Exception as e:
         conn = db.get_conn()
         conn.execute("UPDATE papers SET research_gap=? WHERE id=?", (f"Processing failed: {e}", paper_id))
@@ -81,50 +117,77 @@ def _index_and_summarize(paper_id, full_text):
         conn.close()
 
 
+def _owned_paper_ids(user_id, requested_ids):
+    """Filters a list of paper_ids down to only those the requesting user
+    actually owns — prevents one user from reading/comparing another user's
+    papers just by guessing/reusing an ID."""
+    if not requested_ids:
+        return []
+    conn = db.get_conn()
+    placeholders = ",".join("?" for _ in requested_ids)
+    rows = conn.execute(
+        f"SELECT id FROM papers WHERE id IN ({placeholders}) AND user_id=?",
+        (*requested_ids, user_id),
+    ).fetchall()
+    conn.close()
+    return [r["id"] for r in rows]
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@app.post("/search")
+@app.post("/search", dependencies=[Depends(get_current_user)])
 def search(req: SearchReq):
     results = ingestion.search_arxiv(req.query, max_results=req.max_results, year_from=req.year_from, year_to=req.year_to)
     return {"results": results}
 
 
 @app.post("/library/add-from-search")
-def add_from_search(req: AddFromSearchReq, background_tasks: BackgroundTasks):
+def add_from_search(req: AddFromSearchReq, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
     paper_id = req.id or str(uuid.uuid4())
     full_text = ingestion.fetch_arxiv_full_text(req.pdf_url) if req.pdf_url else ""
     if not full_text:
         full_text = req.abstract
-    _store_paper(paper_id, req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.pdf_url, full_text)
-    background_tasks.add_task(_index_and_summarize, paper_id, full_text)
+    _store_paper(paper_id, user["id"], req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.pdf_url, full_text)
+    background_tasks.add_task(_index_and_summarize, paper_id, user["id"], full_text)
     return {"id": paper_id}
 
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+
+
 @app.post("/library/upload")
-async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...), user=Depends(get_current_user)):
+    if file.content_type != "application/pdf":
+        return {"error": "Only PDF files are accepted."}
     content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        return {"error": "File too large (25 MB limit)."}
+    if not content.startswith(b"%PDF-"):
+        return {"error": "File does not appear to be a valid PDF."}
     text = ingestion.extract_pdf_text(content)
     paper_id = str(uuid.uuid4())
-    _store_paper(paper_id, file.filename, "Uploaded by you", "", "", "upload", "", "", text)
-    background_tasks.add_task(_index_and_summarize, paper_id, text)
+    _store_paper(paper_id, user["id"], file.filename, "Uploaded by you", "", "", "upload", "", "", text)
+    background_tasks.add_task(_index_and_summarize, paper_id, user["id"], text)
     return {"id": paper_id}
 
 
 @app.get("/library")
-def get_library():
+def get_library(user=Depends(get_current_user)):
     conn = db.get_conn()
-    rows = conn.execute("SELECT * FROM papers WHERE in_library=1 ORDER BY created_at DESC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM papers WHERE in_library=1 AND user_id=? ORDER BY created_at DESC", (user["id"],)
+    ).fetchall()
     conn.close()
     return {"papers": [dict(r) for r in rows]}
 
 
 @app.delete("/library/{paper_id}")
-def remove(paper_id: str):
+def remove(paper_id: str, user=Depends(get_current_user)):
     conn = db.get_conn()
-    conn.execute("UPDATE papers SET in_library=0 WHERE id=?", (paper_id,))
+    conn.execute("UPDATE papers SET in_library=0 WHERE id=? AND user_id=?", (paper_id, user["id"]))
     conn.commit()
     conn.close()
     embeddings.delete_paper_chunks(paper_id)
@@ -132,41 +195,72 @@ def remove(paper_id: str):
 
 
 @app.get("/paper/{paper_id}")
-def get_paper(paper_id: str):
+def get_paper(paper_id: str, user=Depends(get_current_user)):
     conn = db.get_conn()
-    row = conn.execute("SELECT * FROM papers WHERE id=?", (paper_id,)).fetchone()
+    row = conn.execute("SELECT * FROM papers WHERE id=? AND user_id=?", (paper_id, user["id"])).fetchone()
     conn.close()
     return dict(row) if row else {"error": "not found"}
 
 
+# --- Rate limiting ----------------------------------------------------------
+_rate_limit_hits = defaultdict(list)
+_global_hits = []
+RATE_LIMIT_MAX = 20
+RATE_LIMIT_WINDOW = 60
+GLOBAL_LIMIT_MAX = 100
+
+
+def _check_rate_limit(user_id, bucket):
+    now = time.time()
+    global _global_hits
+    _global_hits = [t for t in _global_hits if now - t < RATE_LIMIT_WINDOW]
+    if len(_global_hits) >= GLOBAL_LIMIT_MAX:
+        return False
+    _global_hits.append(now)
+
+    key = f"{bucket}:{user_id}"
+    _rate_limit_hits[key] = [t for t in _rate_limit_hits[key] if now - t < RATE_LIMIT_WINDOW]
+    if len(_rate_limit_hits[key]) >= RATE_LIMIT_MAX:
+        return False
+    _rate_limit_hits[key].append(now)
+    return True
+
+
 @app.post("/ask")
-def ask(req: AskReq):
-    return rag.ask(req.question, paper_ids=req.paper_ids)
+def ask(req: AskReq, user=Depends(get_current_user)):
+    if not _check_rate_limit(user["id"], "ask"):
+        return {"answer": "Rate limit reached — please wait a minute and try again.", "sources": []}
+    owned_ids = _owned_paper_ids(user["id"], req.paper_ids) if req.paper_ids else None
+    return rag.ask(req.question, paper_ids=owned_ids, user_id=user["id"])
 
 
 @app.post("/compare")
-def compare(req: CompareReq):
-    if len(req.paper_ids) < 2:
+def compare(req: CompareReq, user=Depends(get_current_user)):
+    owned_ids = _owned_paper_ids(user["id"], req.paper_ids)
+    if len(owned_ids) < 2:
         return {"error": "Select at least 2 papers to compare."}
     conn = db.get_conn()
-    placeholders = ",".join("?" for _ in req.paper_ids)
-    rows = conn.execute(f"SELECT * FROM papers WHERE id IN ({placeholders})", req.paper_ids).fetchall()
+    placeholders = ",".join("?" for _ in owned_ids)
+    rows = conn.execute(f"SELECT * FROM papers WHERE id IN ({placeholders}) AND user_id=?", (*owned_ids, user["id"])).fetchall()
     conn.close()
     return {"papers": [dict(r) for r in rows]}
 
 
 @app.post("/contribute")
-def contribute_ep(req: ContribReq):
-    result = contribute.match_idea(req.idea, req.paper_ids)
+def contribute_ep(req: ContribReq, user=Depends(get_current_user)):
+    if not _check_rate_limit(user["id"], "contribute"):
+        return {"error": "Rate limit reached — please wait a minute and try again."}
+    owned_ids = _owned_paper_ids(user["id"], req.paper_ids)
+    result = contribute.match_idea(req.idea, owned_ids, user["id"])
     return result or {"error": "No matches found — add papers to your library first."}
 
 
 @app.post("/feedback")
-def feedback(req: FeedbackReq):
+def feedback(req: FeedbackReq, user=Depends(get_current_user)):
     conn = db.get_conn()
     conn.execute(
-        "INSERT INTO feedback (target_type, target_id, vote, created_at) VALUES (?, ?, ?, ?)",
-        (req.target_type, req.target_id, req.vote, datetime.datetime.now(datetime.UTC).isoformat()),
+        "INSERT INTO feedback (user_id, target_type, target_id, vote, created_at) VALUES (?, ?, ?, ?, ?)",
+        (user["id"], req.target_type, req.target_id, req.vote, datetime.datetime.now(datetime.UTC).isoformat()),
     )
     conn.commit()
     conn.close()
