@@ -11,7 +11,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 
-from . import analysis, contribute, db, embeddings, ingestion, processing, rag, summarize
+from . import analysis, contribute, db, embeddings, ingestion, processing, rag, relevance, summarize
 
 app = FastAPI(title="Echo API")
 
@@ -24,11 +24,11 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins, allow_methods=
 db.init_db()
 
 # --- Google authentication -------------------------------------------------
-# Every route (except /health) requires a valid Google ID token in the
-# Authorization header: "Authorization: Bearer <token>". The token is
-# verified against Google's public keys (no secret needed on our side).
-# The verified 'sub' claim becomes the user's permanent user_id, used to
-# scope every database and vector-store query so users can never see or
+# Every route (except /health and /config/relevance) requires a valid Google
+# ID token in the Authorization header: "Authorization: Bearer <token>". The
+# token is verified against Google's public keys (no secret needed on our
+# side). The verified 'sub' claim becomes the user's permanent user_id, used
+# to scope every database and vector-store query so users can never see or
 # retrieve each other's data.
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 
@@ -136,6 +136,16 @@ def _owned_paper_ids(user_id, requested_ids):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/config/relevance")
+def get_relevance_config():
+    """Exposes the same thresholds/labels analysis.py uses server-side, so
+    the frontend never hardcodes a threshold number that could drift out of
+    sync with relevance.py (the single source of truth). No auth required —
+    this is static config, not user data, and the frontend fetches it at
+    boot before sign-in completes."""
+    return relevance.config_payload()
 
 
 @app.post("/search", dependencies=[Depends(get_current_user)])

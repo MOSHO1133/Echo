@@ -10,6 +10,24 @@ let currentPaperId = sessionStorage.getItem('echo_currentPaperId') || null;
 let chatHistory = {};
 let pollTimer = null;
 
+// Server-owned relevance thresholds/labels, fetched once at boot so the
+// frontend never hardcodes a threshold number that could drift out of sync
+// with relevance.py (the single source of truth on the backend).
+let relevanceConfig = null;
+
+async function loadRelevanceConfig() {
+  try {
+    const res = await fetch(API + '/config/relevance');
+    relevanceConfig = await res.json();
+  } catch (e) {
+    relevanceConfig = {
+      high_relevance_threshold: 0.45,
+      relevant_threshold: 0.75,
+      labels: { reviewed: 'Highly relevant', preprint: 'Relevant', low: 'Loosely relevant / No evidence found' },
+    };
+  }
+}
+
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -53,7 +71,6 @@ function showAuthGate() {
     google.accounts.id.initialize({ client_id: window.GOOGLE_CLIENT_ID, callback: handleCredentialResponse });
     google.accounts.id.renderButton(document.getElementById('googleSignInDiv'), { theme: 'filled_black', size: 'large', shape: 'pill' });
   } else {
-    // Google's script loads async — it may not be ready yet on first call.
     setTimeout(showAuthGate, 200);
   }
 }
@@ -243,8 +260,6 @@ function renderPaper() {
   const titleEl = document.getElementById('paperTitle');
   const metaEl = document.getElementById('paperMeta');
   const content = document.getElementById('paperContent');
-  // Fall back to the most recently added paper if nothing is explicitly selected
-  // (e.g. first visit, or the previously selected paper was removed).
   if ((!currentPaperId || !library.some(x => x.id === currentPaperId)) && library.length > 0) {
     currentPaperId = library[0].id;
     sessionStorage.setItem('echo_currentPaperId', currentPaperId);
@@ -295,7 +310,7 @@ function renderPaper() {
   return html;
 }
 
-let chatScope = 'paper'; // 'paper' = current paper only, 'library' = whole library, ranked by relevance
+let chatScope = 'paper';
 
 function setChatScope(scope) {
   chatScope = scope;
@@ -308,10 +323,19 @@ function setChatScope(scope) {
   if (chatInput) chatInput.focus();
 }
 
-function relevanceLabel(avgDistance) {
-  if (avgDistance < 0.6) return { text: 'Highly relevant', cls: 'reviewed' };
-  if (avgDistance < 1.0) return { text: 'Relevant', cls: 'preprint' };
-  return { text: 'Loosely relevant', cls: 'low' };
+// Reads thresholds from the server-fetched relevanceConfig instead of
+// hardcoding numbers here — keeps this in permanent lockstep with
+// relevance.py on the backend.
+function relevanceLabel(distance) {
+  const cfg = relevanceConfig || {
+    high_relevance_threshold: 0.45,
+    relevant_threshold: 0.75,
+    labels: { reviewed: 'Highly relevant', preprint: 'Relevant', low: 'Loosely relevant' },
+  };
+  if (distance === null || distance === undefined) return { text: 'No evidence found', cls: 'low' };
+  if (distance < cfg.high_relevance_threshold) return { text: cfg.labels.reviewed, cls: 'reviewed' };
+  if (distance < cfg.relevant_threshold) return { text: cfg.labels.preprint, cls: 'preprint' };
+  return { text: (cfg.labels.low || 'Loosely relevant').split(' / ')[0], cls: 'low' };
 }
 
 function renderChatLog() {
@@ -352,7 +376,6 @@ async function sendChat() {
   try {
     const body = { question: q };
     if (chatScope === 'paper') body.paper_ids = [currentPaperId];
-    // chatScope === 'library': omit paper_ids entirely -> backend searches the whole library
     const data = await api('/ask', { method: 'POST', body: JSON.stringify(body) });
     chatHistory[currentPaperId].pop();
     chatHistory[currentPaperId].push({ role: 'a', text: data.answer, sources: data.sources, rankedPapers: data.ranked_papers });
@@ -420,14 +443,6 @@ async function analyzeIdea() {
   } catch (e) { el.innerHTML = `<div class="empty-state">Something went wrong reaching Echo.</div>`; }
 }
 
-function relevanceBadgeFromDistance(dist) {
-  if (dist === null || dist === undefined) {
-    return `<span class="badge low" style="margin:0;"><span class="dot"></span>No evidence found</span>`;
-  }
-  const rel = relevanceLabel(dist);
-  return `<span class="badge ${rel.cls}" style="margin:0;" title="distance ${dist.toFixed(3)}"><span class="dot"></span>${rel.text}</span>`;
-}
-
 async function runAnalysis() {
   const q = document.getElementById('analyzeInput').value.trim();
   const el = document.getElementById('analyzeResult');
@@ -448,16 +463,22 @@ function renderAnalysisResult(data) {
   const paperIds = Object.keys(titles);
   let html = '';
 
-  const badgeFor = (item) => `<span class="badge ${item.css_class}" style="margin:0;" title="distance ${item.distance !== null && item.distance !== undefined ? item.distance.toFixed(3) : 'n/a'}"><span class="dot"></span>${escapeHtml(item.label)}</span>`;
+  // Every badge shows the 0-100 score (higher = better) instead of raw
+  // distance — the score is server-computed and its tier boundaries are
+  // mathematically anchored to the same thresholds driving the color, so
+  // score and color can never disagree.
+  const badgeFor = (item) => `<span class="badge ${item.css_class}" style="margin:0;" title="${item.score !== null && item.score !== undefined ? item.score + '% match' : 'no evidence'}"><span class="dot"></span>${escapeHtml(item.label)}</span>`;
 
-  // 0) Fit summary — the one-line plain-English takeaway, shown before any tables
+  // 0) Fit summary — now accounts for ALL papers (high + relevant + loosely
+  // relevant), so the sentence never leaves papers unaccounted for.
   const fs = data.fit_summary;
   if (fs) {
     const parts = [];
-    parts.push(`<strong>${fs.high_count}</strong> of <strong>${fs.total}</strong> papers are highly relevant to this question`);
-    if (fs.relevant_count > 0) parts.push(`${fs.relevant_count} more are partially relevant`);
+    parts.push(`<strong>${fs.high_count}</strong> of <strong>${fs.total}</strong> papers are ${fs.high_label.toLowerCase()} to this question`);
+    if (fs.relevant_count > 0) parts.push(`${fs.relevant_count} more are ${fs.relevant_label.toLowerCase()}`);
+    if (fs.low_count > 0) parts.push(`${fs.low_count} ${fs.low_count === 1 ? 'is' : 'are'} only ${fs.low_label.toLowerCase()}`);
     if (fs.coverage_pct !== null && fs.coverage_pct !== undefined) {
-      parts.push(`your library covers <strong>${fs.coverage_pct}%</strong> of this question's sub-topics`);
+      parts.push(`your library has at least a partial match for <strong>${fs.coverage_pct}%</strong> of this question's sub-topics`);
     }
     let weakLine = '';
     if (fs.weakest_title) {
@@ -470,7 +491,7 @@ function renderAnalysisResult(data) {
       </div>`;
   }
 
-  // 1) Overall ranked papers — server already sorted + labeled these
+  // 1) Overall ranked papers
   html += `<div class="card"><div class="eyebrow">Papers ranked by overall relevance</div>`;
   if (!data.ranked_overall || data.ranked_overall.length === 0) {
     html += `<div class="field-body" style="margin-top:8px;">No relevant content found for this question.</div>`;
@@ -484,7 +505,7 @@ function renderAnalysisResult(data) {
   }
   html += `</div>`;
 
-  // 2) Section leaderboards — "which paper's Methodology/Findings/etc is most relevant"
+  // 2) Section leaderboards
   const catEntries = Object.entries(data.section_leaders || {});
   html += `<div class="card"><div class="eyebrow">Most relevant paper, by section</div>`;
   if (catEntries.length === 0) {
@@ -504,12 +525,19 @@ function renderAnalysisResult(data) {
   }
   html += `</div>`;
 
-  // 3) Heatmap: papers x sections — pure CSS grid, no external chart library
-  const categories = Object.keys(data.section_leaders || {});
+  // 3) Heatmap — cells now show a 0-100 score (higher = better, no more
+  // "lower is better" confusion) and columns are ordered by how many
+  // papers actually have data in them, so the most informative sections
+  // read left-to-right first instead of being scattered among sparse ones.
+  let categories = Object.keys(data.section_leaders || {});
   if (categories.length && paperIds.length) {
+    const countForCat = (cat) => paperIds.filter(pid => (data.paper_section_scores[pid] || {})[cat]).length;
+    categories = categories.slice().sort((a, b) => countForCat(b) - countForCat(a) || a.localeCompare(b));
+
     const colWidth = 92;
     const cellColor = (cssClass) => cssClass === 'reviewed' ? '#2F6F6B' : (cssClass === 'preprint' ? '#C48A2E' : '#B4432E');
     html += `<div class="card"><div class="eyebrow">Relevance heatmap</div>
+      <div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">Each cell is a match score from 0–100 (higher = closer match). Columns are ordered left-to-right by how much data is available.</div>
       <div style="overflow-x:auto; margin-top:12px;">
         <div style="display:grid; grid-template-columns: 150px repeat(${categories.length}, ${colWidth}px); gap:4px; min-width:${150 + categories.length * (colWidth + 4)}px;">
           <div></div>
@@ -520,22 +548,24 @@ function renderAnalysisResult(data) {
       const cells = categories.map(c => {
         const item = scores[c];
         if (!item) {
-          return `<div title="${escapeHtml(c)}: no matching content" style="background:#ECECE4; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:10px;">—</div>`;
+          return `<div title="${escapeHtml(c)}: no matching content found in this section" style="background:#ECECE4; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:10px;">—</div>`;
         }
-        return `<div title="${escapeHtml(c)}: ${item.label} (${item.distance.toFixed(3)})" style="background:${cellColor(item.css_class)}; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-family:'IBM Plex Mono',monospace;">${item.distance.toFixed(2)}</div>`;
+        return `<div title="${escapeHtml(c)}: ${item.label} (${item.score}% match)" style="background:${cellColor(item.css_class)}; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:600; font-family:'IBM Plex Mono',monospace;">${item.score}%</div>`;
       }).join('');
       return rowLabel + cells;
     }).join('')}
         </div>
       </div>
-      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Teal = highly relevant · amber = relevant · red = loosely relevant · gray = no matching content found. Lower number = closer match.</div>
+      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Teal = highly relevant (75–100%) · amber = relevant (40–74%) · red = loosely relevant (below 40%) · gray "—" = no matching content found in that section for that paper. Higher % is always better.</div>
     </div>`;
   }
 
-  // 4) Sub-topic coverage
+  // 4) Sub-topic coverage — colored dot uses the same score-based tier as
+  // the heatmap, with the score visible in the tooltip.
   const subtopics = data.subtopics || [];
   if (subtopics.length) {
     const colWidth = 100;
+    const dotColor = (cssClass) => cssClass === 'reviewed' ? '#2F6F6B' : (cssClass === 'preprint' ? '#C48A2E' : null);
     html += `<div class="card"><div class="eyebrow">Sub-topic coverage</div>
       <div style="overflow-x:auto; margin-top:12px;">
         <div style="display:grid; grid-template-columns: 170px repeat(${paperIds.length}, ${colWidth}px); gap:4px; min-width:${170 + paperIds.length * (colWidth + 4)}px;">
@@ -545,15 +575,19 @@ function renderAnalysisResult(data) {
       const row = data.coverage[st] || {};
       const rowLabel = `<div style="font-size:12px; padding:6px 4px; display:flex; align-items:center;">${escapeHtml(st)}</div>`;
       const cells = paperIds.map(pid => {
-        const cell = row[pid] || { covered: false, distance: null };
-        const title = cell.distance !== null && cell.distance !== undefined ? cell.distance.toFixed(3) : 'no evidence';
-        return `<div style="display:flex; align-items:center; justify-content:center; height:32px; font-size:16px;" title="${title}">${cell.covered ? '✅' : '—'}</div>`;
+        const cell = row[pid] || { covered: false, distance: null, score: null, label: 'No evidence found', css_class: 'low' };
+        const hasScore = cell.score !== null && cell.score !== undefined;
+        const title = hasScore ? `${cell.label} (${cell.score}% match)` : 'No evidence found';
+        const color = dotColor(cell.css_class);
+        return `<div style="display:flex; align-items:center; justify-content:center; height:32px;" title="${escapeHtml(title)}">
+                ${color ? `<div style="width:14px; height:14px; border-radius:50%; background:${color};"></div>` : '<span style="color:var(--ink-soft); font-size:12px;">—</span>'}
+              </div>`;
       }).join('');
       return rowLabel + cells;
     }).join('')}
         </div>
       </div>
-      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Sub-topics are auto-derived from your question. ✅ = at least one paper chunk closely matched that sub-topic.</div>
+      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Sub-topics are auto-derived from your question and matched independently — a short sub-topic can score better than the full question. Dot color follows the same scale as the heatmap above: teal = highly relevant, amber = relevant, blank = no strong match.</div>
     </div>`;
   }
 
@@ -576,11 +610,12 @@ function updateNavCount() {
   badge.classList.toggle('show', library.length > 0);
 }
 
-// App boot: show the Google sign-in gate if there's no stored session,
-// otherwise restore the session and load the user's library directly.
-if (googleToken) {
-  currentUser = decodeJwtPayload(googleToken);
-  showApp();
-} else {
-  showAuthGate();
-}
+// App boot
+loadRelevanceConfig().then(() => {
+  if (googleToken) {
+    currentUser = decodeJwtPayload(googleToken);
+    showApp();
+  } else {
+    showAuthGate();
+  }
+});

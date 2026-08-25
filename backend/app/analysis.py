@@ -22,7 +22,19 @@ CATEGORY_MAP = {
     "body": "Other",
 }
 
-PER_PAPER_K = 10  # chunks pulled per paper when building the section matrix
+# Chunks pulled per paper when building the section matrix. This used to be
+# 10, which was far too small: with up to 8 possible section categories, the
+# top-10 globally-ranked chunks for a paper frequently didn't include ANY
+# chunk from several sections — making those sections render as "no
+# matching content" when really they just weren't sampled at all. This is
+# now raised substantially so essentially all of a typical paper's chunks
+# get considered, which eliminates almost all *artificial* blanks. A blank
+# cell after this change is a real signal: that section genuinely has
+# little content related to the question. (If a paper has more indexed
+# chunks than this number, some undersampling can still theoretically
+# happen — for a fully airtight fix, this should be replaced with a
+# per-section query, or a k that adapts to each paper's actual chunk count.)
+PER_PAPER_K = 60
 
 
 def canonical_category(raw_section):
@@ -31,7 +43,12 @@ def canonical_category(raw_section):
 
 def _labeled(distance):
     text, css_class = relevance.distance_to_label(distance)
-    return {"distance": distance, "label": text, "css_class": css_class}
+    return {
+        "distance": distance,
+        "score": relevance.distance_to_score(distance),
+        "label": text,
+        "css_class": css_class,
+    }
 
 
 def _decompose_question(question):
@@ -67,12 +84,12 @@ def analyze_library(question, owned_papers, user_id):
     if not owned_papers:
         return {
             "ranked_overall": [], "paper_section_scores": {}, "section_leaders": {},
-            "subtopics": [], "coverage": {},
+            "subtopics": [], "coverage": {}, "fit_summary": None,
         }
 
     q_emb = embeddings.encode_query(question)
 
-    paper_section_scores = {}  # paper_id -> {category: {distance, label, css_class}}
+    paper_section_scores = {}  # paper_id -> {category: {distance, score, label, css_class}}
     overall_paper_scores = {}  # paper_id -> best (lowest) distance across all its sections
 
     for p in owned_papers:
@@ -119,11 +136,18 @@ def analyze_library(question, owned_papers, user_id):
                     if pid not in best_per_paper or c["distance"] < best_per_paper[pid]:
                         best_per_paper[pid] = c["distance"]
                 coverage[st] = {
-                    pid: {"distance": best_per_paper.get(pid), "covered": relevance.is_covered(best_per_paper.get(pid))}
+                    pid: {
+                        "distance": best_per_paper.get(pid),
+                        "covered": relevance.is_covered(best_per_paper.get(pid)),
+                        **relevance.label_pair(best_per_paper.get(pid)),
+                    }
                     for pid in owned_ids
                 }
             except Exception:
-                coverage[st] = {pid: {"distance": None, "covered": False} for pid in owned_ids}
+                coverage[st] = {
+                    pid: {"distance": None, "covered": False, **relevance.label_pair(None)}
+                    for pid in owned_ids
+                }
 
         # Sort so the biggest gaps (fewest papers covering that sub-topic)
         # surface first — otherwise a well-covered sub-topic could bury a
@@ -145,15 +169,18 @@ def analyze_library(question, owned_papers, user_id):
 
 def _build_fit_summary(ranked_overall, subtopics, coverage, titles_map):
     """One synthesized, plain-English readout of how well the library
-    actually answers THIS question — complements the static diversity score
-    (which doesn't depend on any question) with a per-question 'can I
-    actually answer this' signal."""
+    actually answers THIS question. Every phrase is derived from the same
+    css_class/label values shown as badges elsewhere on the page, and now
+    explicitly accounts for ALL papers (high + relevant + loosely relevant),
+    not just the top two tiers — so the sentence never implies papers are
+    unaccounted for."""
     if not ranked_overall:
         return None
 
     high_count = sum(1 for r in ranked_overall if r["css_class"] == "reviewed")
     relevant_count = sum(1 for r in ranked_overall if r["css_class"] == "preprint")
     total = len(ranked_overall)
+    low_count = total - high_count - relevant_count
 
     coverage_pct = None
     if subtopics:
@@ -171,9 +198,16 @@ def _build_fit_summary(ranked_overall, subtopics, coverage, titles_map):
     return {
         "high_count": high_count,
         "relevant_count": relevant_count,
+        "low_count": low_count,
         "total": total,
         "coverage_pct": coverage_pct,
         "weakest_title": weakest,
+        # Server-owned English labels for the tiers referenced in the
+        # summary sentence, so the frontend never writes its own synonym
+        # that could drift from the badge text.
+        "relevant_label": relevance.distance_to_label(0.5)[0],   # "Relevant"
+        "high_label": relevance.distance_to_label(0.0)[0],       # "Highly relevant"
+        "low_label": relevance.distance_to_label(0.9)[0],        # "Loosely relevant"
     }
 
 
