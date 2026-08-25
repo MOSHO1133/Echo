@@ -125,12 +125,55 @@ def analyze_library(question, owned_papers, user_id):
             except Exception:
                 coverage[st] = {pid: {"distance": None, "covered": False} for pid in owned_ids}
 
+        # Sort so the biggest gaps (fewest papers covering that sub-topic)
+        # surface first — otherwise a well-covered sub-topic could bury a
+        # genuine gap further down an unsorted list.
+        subtopics.sort(key=lambda st: sum(1 for cell in coverage[st].values() if cell["covered"]))
+
+    titles_map = {p["id"]: p["title"] for p in owned_papers}
+    fit_summary = _build_fit_summary(ranked_overall, subtopics, coverage, titles_map)
+
     return {
         "ranked_overall": ranked_overall,
         "paper_section_scores": paper_section_scores,
         "section_leaders": section_leaders,
         "subtopics": subtopics,
         "coverage": coverage,
+        "fit_summary": fit_summary,
+    }
+
+
+def _build_fit_summary(ranked_overall, subtopics, coverage, titles_map):
+    """One synthesized, plain-English readout of how well the library
+    actually answers THIS question — complements the static diversity score
+    (which doesn't depend on any question) with a per-question 'can I
+    actually answer this' signal."""
+    if not ranked_overall:
+        return None
+
+    high_count = sum(1 for r in ranked_overall if r["css_class"] == "reviewed")
+    relevant_count = sum(1 for r in ranked_overall if r["css_class"] == "preprint")
+    total = len(ranked_overall)
+
+    coverage_pct = None
+    if subtopics:
+        covered_subtopics = sum(
+            1 for st in subtopics if any(cell["covered"] for cell in coverage[st].values())
+        )
+        coverage_pct = round(covered_subtopics / len(subtopics) * 100)
+
+    weakest = None
+    if len(ranked_overall) >= 2:
+        weakest_entry = ranked_overall[-1]
+        if weakest_entry["css_class"] == "low":  # only flag it if genuinely weak, not just "last but still fine"
+            weakest = titles_map.get(weakest_entry["paper_id"], weakest_entry["paper_id"])
+
+    return {
+        "high_count": high_count,
+        "relevant_count": relevant_count,
+        "total": total,
+        "coverage_pct": coverage_pct,
+        "weakest_title": weakest,
     }
 
 

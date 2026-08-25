@@ -3,14 +3,22 @@ feature that ranks papers/sections by embedding distance (analyze, contribute,
 whole-library chat). Keeping this in one place prevents the Python and
 JavaScript sides from drifting out of sync with different magic numbers.
 
-Thresholds assume COSINE distance (range 0-2, 1.0 = orthogonal/unrelated).
-This only holds true if the ChromaDB collection is explicitly configured
-with metadata={"hnsw:space": "cosine"} — see embeddings.py.
+Thresholds use COSINE distance (0 = identical, 2 = opposite). IMPORTANT:
+these values were empirically calibrated against this app's actual
+embedding model (all-MiniLM-L6-v2), NOT assumed from theory. Testing showed
+a genuinely unrelated query ("i want to make a boat") scored 0.86-0.94
+against real library papers — well below the naive "1.0 = orthogonal"
+assumption. This is a known property of sentence-transformer embedding
+spaces (anisotropy): unrelated text pairs cluster closer together than a
+uniform cosine distribution would suggest. If the embedding model is ever
+changed, these thresholds should be re-measured, not assumed.
 """
 
-HIGH_RELEVANCE_THRESHOLD = 0.6   # below this: strong topical match
-RELEVANT_THRESHOLD = 1.0         # below this: meaningful but partial match
+HIGH_RELEVANCE_THRESHOLD = 0.45  # below this: strong topical match
+RELEVANT_THRESHOLD = 0.75        # below this: meaningful but partial match
                                   # at/above this: essentially unrelated
+NO_MATCH_THRESHOLD = 0.80        # used by contribute.py to reject ideas with
+                                  # no genuinely related paper in the library
 
 
 def distance_to_label(distance):

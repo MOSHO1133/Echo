@@ -12,12 +12,16 @@ CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
 def get_model():
     global _model
     if _model is None:
-        # device="cpu" explicitly avoids a known PyTorch/transformers issue
-        # where certain versions lazily place model weights on a 'meta'
-        # device during load, then fail with "Cannot copy out of meta
-        # tensor" when the library tries to move them. Forcing CPU placement
-        # up front sidesteps that entirely.
-        _model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
+        # model_kwargs={"low_cpu_mem_usage": False} disables newer transformers'
+        # lazy "meta device" weight initialization, which causes "Cannot copy
+        # out of meta tensor" crashes on some torch/transformers/accelerate
+        # version combinations — this forces real (non-meta) weight loading
+        # up front, which .to("cpu") can then actually operate on.
+        _model = SentenceTransformer(
+            "all-MiniLM-L6-v2",
+            device="cpu",
+            model_kwargs={"low_cpu_mem_usage": False},
+        )
     return _model
 
 

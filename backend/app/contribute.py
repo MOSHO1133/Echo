@@ -1,13 +1,5 @@
 from . import db, embeddings, rag, relevance
 
-# Beyond this distance, the "closest" paper isn't actually related to the idea —
-# it's just the least-far option among unrelated papers. Embedding similarity
-# search always returns *something*, so without this cutoff, completely
-# unrelated ideas (e.g. "I want to make a bottle of water") get confidently
-# matched and given fabricated-sounding guidance instead of an honest
-# "nothing relevant found" response.
-NO_MATCH_THRESHOLD = 1.3
-
 
 def match_idea(idea_text, library_ids, user_id, k=6):
     """Real embedding-similarity matching (not keyword overlap) against the
@@ -25,7 +17,7 @@ def match_idea(idea_text, library_ids, user_id, k=6):
     best_id = min(scores, key=lambda pid: sum(scores[pid]) / len(scores[pid]))
     avg_distance = sum(scores[best_id]) / len(scores[best_id])
 
-    if avg_distance > NO_MATCH_THRESHOLD:
+    if avg_distance > relevance.NO_MATCH_THRESHOLD:
         return {
             "error": (
                 "No sufficiently related paper found in your library for this idea. "

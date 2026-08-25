@@ -438,7 +438,8 @@ async function runAnalysis() {
     if (data.error) { el.innerHTML = `<div class="empty-state">${escapeHtml(data.error)}</div>`; return; }
     el.innerHTML = renderAnalysisResult(data);
   } catch (e) {
-    el.innerHTML = `<div class="empty-state">Something went wrong reaching Echo.</div>`;
+    console.error('Analyze failed:', e);
+    el.innerHTML = `<div class="empty-state">Something went wrong reaching Echo. (${escapeHtml(e.message || 'unknown error')})</div>`;
   }
 }
 
@@ -447,16 +448,38 @@ function renderAnalysisResult(data) {
   const paperIds = Object.keys(titles);
   let html = '';
 
-  // 1) Overall ranked papers
+  const badgeFor = (item) => `<span class="badge ${item.css_class}" style="margin:0;" title="distance ${item.distance !== null && item.distance !== undefined ? item.distance.toFixed(3) : 'n/a'}"><span class="dot"></span>${escapeHtml(item.label)}</span>`;
+
+  // 0) Fit summary — the one-line plain-English takeaway, shown before any tables
+  const fs = data.fit_summary;
+  if (fs) {
+    const parts = [];
+    parts.push(`<strong>${fs.high_count}</strong> of <strong>${fs.total}</strong> papers are highly relevant to this question`);
+    if (fs.relevant_count > 0) parts.push(`${fs.relevant_count} more are partially relevant`);
+    if (fs.coverage_pct !== null && fs.coverage_pct !== undefined) {
+      parts.push(`your library covers <strong>${fs.coverage_pct}%</strong> of this question's sub-topics`);
+    }
+    let weakLine = '';
+    if (fs.weakest_title) {
+      weakLine = `<div style="margin-top:8px; font-size:12.5px; color:var(--ink-soft);">Weakest fit for this question: <strong>${escapeHtml(fs.weakest_title.slice(0, 60))}</strong> — likely still useful for other angles, just not this one.</div>`;
+    }
+    html += `<div class="card" style="background:var(--teal-soft); border-color:var(--teal);">
+        <div class="eyebrow">How well your library fits this question</div>
+        <div style="font-size:14.5px; margin-top:6px; line-height:1.6;">${parts.join(' · ')}.</div>
+        ${weakLine}
+      </div>`;
+  }
+
+  // 1) Overall ranked papers — server already sorted + labeled these
   html += `<div class="card"><div class="eyebrow">Papers ranked by overall relevance</div>`;
   if (!data.ranked_overall || data.ranked_overall.length === 0) {
     html += `<div class="field-body" style="margin-top:8px;">No relevant content found for this question.</div>`;
   } else {
-    html += data.ranked_overall.map(([pid, dist], i) => `
-      <div style="display:flex; align-items:center; gap:10px; margin:10px 0; cursor:pointer;" onclick="viewPaper('${pid}')">
+    html += data.ranked_overall.map((item, i) => `
+      <div style="display:flex; align-items:center; gap:10px; margin:10px 0; cursor:pointer;" onclick="viewPaper('${item.paper_id}')">
         <span style="font-family:'IBM Plex Mono',monospace; color:#767A72; font-size:12px;">${i + 1}.</span>
-        <span style="flex:1; text-decoration:underline; font-size:13.5px;">${escapeHtml((titles[pid] || pid).slice(0, 60))}</span>
-        ${relevanceBadgeFromDistance(dist)}
+        <span style="flex:1; text-decoration:underline; font-size:13.5px;">${escapeHtml((titles[item.paper_id] || item.paper_id).slice(0, 60))}</span>
+        ${badgeFor(item)}
       </div>`).join('');
   }
   html += `</div>`;
@@ -468,12 +491,13 @@ function renderAnalysisResult(data) {
     html += `<div class="field-body" style="margin-top:8px;">No section-level matches found.</div>`;
   } else {
     html += catEntries.map(([cat, ranked]) => {
+      if (!ranked.length) return '';
       const top = ranked[0];
       return `<div style="margin:12px 0; padding-bottom:12px; border-bottom:1px solid var(--line);">
           <div class="field-label">${escapeHtml(cat)}</div>
-          <div style="display:flex; align-items:center; gap:10px; margin-top:5px; cursor:pointer;" onclick="viewPaper('${top[0]}')">
-            <span style="flex:1; text-decoration:underline; font-size:13.5px;">${escapeHtml((titles[top[0]] || top[0]).slice(0, 55))}</span>
-            ${relevanceBadgeFromDistance(top[1])}
+          <div style="display:flex; align-items:center; gap:10px; margin-top:5px; cursor:pointer;" onclick="viewPaper('${top.paper_id}')">
+            <span style="flex:1; text-decoration:underline; font-size:13.5px;">${escapeHtml((titles[top.paper_id] || top.paper_id).slice(0, 55))}</span>
+            ${badgeFor(top)}
           </div>
         </div>`;
     }).join('');
@@ -484,6 +508,7 @@ function renderAnalysisResult(data) {
   const categories = Object.keys(data.section_leaders || {});
   if (categories.length && paperIds.length) {
     const colWidth = 92;
+    const cellColor = (cssClass) => cssClass === 'reviewed' ? '#2F6F6B' : (cssClass === 'preprint' ? '#C48A2E' : '#B4432E');
     html += `<div class="card"><div class="eyebrow">Relevance heatmap</div>
       <div style="overflow-x:auto; margin-top:12px;">
         <div style="display:grid; grid-template-columns: 150px repeat(${categories.length}, ${colWidth}px); gap:4px; min-width:${150 + categories.length * (colWidth + 4)}px;">
@@ -493,21 +518,17 @@ function renderAnalysisResult(data) {
       const scores = data.paper_section_scores[pid] || {};
       const rowLabel = `<div style="font-size:12px; padding:6px 4px; display:flex; align-items:center;">${escapeHtml((titles[pid] || pid).slice(0, 20))}</div>`;
       const cells = categories.map(c => {
-        const dist = scores[c];
-        let bg = '#ECECE4', label = '—';
-        if (dist !== undefined) {
-          if (dist < 0.6) { bg = '#2F6F6B'; }
-          else if (dist < 1.0) { bg = '#C48A2E'; }
-          else { bg = '#B4432E'; }
-          label = dist.toFixed(2);
+        const item = scores[c];
+        if (!item) {
+          return `<div title="${escapeHtml(c)}: no matching content" style="background:#ECECE4; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:10px;">—</div>`;
         }
-        return `<div title="${escapeHtml(c)}: ${dist !== undefined ? dist.toFixed(3) : 'no matching content'}" style="background:${bg}; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-family:'IBM Plex Mono',monospace;">${label}</div>`;
+        return `<div title="${escapeHtml(c)}: ${item.label} (${item.distance.toFixed(3)})" style="background:${cellColor(item.css_class)}; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:10px; font-family:'IBM Plex Mono',monospace;">${item.distance.toFixed(2)}</div>`;
       }).join('');
       return rowLabel + cells;
     }).join('')}
         </div>
       </div>
-      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Darker teal = highly relevant · amber = relevant · red = present but weak · gray = no matching content found. Lower number = closer match.</div>
+      <div style="margin-top:12px; font-size:11px; color:var(--ink-soft);">Teal = highly relevant · amber = relevant · red = loosely relevant · gray = no matching content found. Lower number = closer match.</div>
     </div>`;
   }
 
@@ -524,9 +545,9 @@ function renderAnalysisResult(data) {
       const row = data.coverage[st] || {};
       const rowLabel = `<div style="font-size:12px; padding:6px 4px; display:flex; align-items:center;">${escapeHtml(st)}</div>`;
       const cells = paperIds.map(pid => {
-        const dist = row[pid];
-        const covered = dist !== null && dist !== undefined && dist < 1.0;
-        return `<div style="display:flex; align-items:center; justify-content:center; height:32px; font-size:16px;" title="${dist !== null && dist !== undefined ? dist.toFixed(3) : 'no evidence'}">${covered ? '✅' : '—'}</div>`;
+        const cell = row[pid] || { covered: false, distance: null };
+        const title = cell.distance !== null && cell.distance !== undefined ? cell.distance.toFixed(3) : 'no evidence';
+        return `<div style="display:flex; align-items:center; justify-content:center; height:32px; font-size:16px;" title="${title}">${cell.covered ? '✅' : '—'}</div>`;
       }).join('');
       return rowLabel + cells;
     }).join('')}
