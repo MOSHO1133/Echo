@@ -1,3 +1,26 @@
+// --- Theme (light/dark) -----------------------------------------------------
+// Fully isolated: only touches a data-attribute on <html> and one
+// localStorage key. Never calls the API, never touches library/chat/analyze
+// state, runs before anything else boots.
+function setTheme(mode) {
+  document.documentElement.setAttribute('data-theme', mode);
+  localStorage.setItem('echo_theme', mode);
+  const lightBtn = document.getElementById('themeLightBtn');
+  const darkBtn = document.getElementById('themeDarkBtn');
+  if (lightBtn && darkBtn) {
+    lightBtn.classList.toggle('active', mode === 'light');
+    darkBtn.classList.toggle('active', mode === 'dark');
+  }
+}
+
+function initTheme() {
+  const saved = localStorage.getItem('echo_theme');
+  const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  setTheme(saved || (prefersDark ? 'dark' : 'light'));
+}
+
+initTheme();
+
 const API = window.ECHO_API_BASE || 'http://localhost:8000';
 
 let googleToken = sessionStorage.getItem('echo_google_token') || null;
