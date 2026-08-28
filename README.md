@@ -1,6 +1,4 @@
-bash
 
-cat > /home/claude/docs/README.md << 'README_EOF'
 # Echo — AI Research Assistant
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
@@ -707,6 +705,4 @@ behind each fix is often more valuable than the diff itself.
 Licensed under the [Apache License 2.0](./LICENSE).
 
 Built by **Muhammad Shees**.
-README_EOF
-echo "done, line count:"
-wc -l /home/claude/docs/README.md
+
