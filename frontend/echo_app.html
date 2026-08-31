@@ -391,8 +391,25 @@
     }
 
     .btn-primary {
-      background: var(--ink);
+      background: #14181F;
       color: #fff;
+      border: 1px solid transparent;
+    }
+
+    [data-theme="dark"] .btn-primary {
+      background: #2A3140;
+      border-color: #3A4152;
+    }
+
+    .btn-primary {
+      background: #14181F;
+      color: #fff;
+      border: 1px solid transparent;
+    }
+
+    [data-theme="dark"] .btn-primary {
+      background: #2A3140;
+      border-color: #3A4152;
     }
 
     .btn-ghost {
@@ -828,11 +845,11 @@
       white-space: pre-wrap;
     }
 
-    .toast {
+     .toast {
       position: fixed;
       bottom: 24px;
       right: 24px;
-      background: var(--ink);
+      background: #14181F;
       color: #fff;
       padding: 12px 18px;
       border-radius: 9px;
@@ -841,6 +858,11 @@
       z-index: 80;
       opacity: 0;
       transition: opacity .25s ease;
+    }
+
+    [data-theme="dark"] .toast {
+      background: #2A3140;
+      border: 1px solid #3A4152;
     }
 
     .toast.show {
@@ -899,7 +921,7 @@
     #authGate {
       background:
         radial-gradient(ellipse 60% 50% at 50% 42%, rgba(217, 232, 92, 0.06), transparent 70%),
-        radial-gradient(ellipse 100% 80% at 50% 100%, #1B212C, var(--ink) 60%);
+        radial-gradient(ellipse 100% 80% at 50% 100%, #1B212C, #14181F 60%);
       overflow: hidden;
     }
 

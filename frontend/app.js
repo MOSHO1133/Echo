@@ -492,7 +492,7 @@ function renderAnalysisResult(data) {
   // score and color can never disagree.
   const badgeFor = (item) => `<span class="badge ${item.css_class}" style="margin:0;" title="${item.score !== null && item.score !== undefined ? item.score + '% match' : 'no evidence'}"><span class="dot"></span>${escapeHtml(item.label)}</span>`;
 
-  // 0) Fit summary — now accounts for ALL papers (high + relevant + loosely
+  // 0) Fit summary — accounts for ALL papers (high + relevant + loosely
   // relevant), so the sentence never leaves papers unaccounted for.
   const fs = data.fit_summary;
   if (fs) {
@@ -548,10 +548,10 @@ function renderAnalysisResult(data) {
   }
   html += `</div>`;
 
-  // 3) Heatmap — cells now show a 0-100 score (higher = better, no more
-  // "lower is better" confusion) and columns are ordered by how many
-  // papers actually have data in them, so the most informative sections
-  // read left-to-right first instead of being scattered among sparse ones.
+  // 3) Heatmap — cells show a 0-100 score (higher = better) with strong
+  // contrast (bold text + shadow) so numbers stay legible on every color,
+  // and columns are ordered by how much real data is available so the
+  // most informative sections read first, left to right.
   let categories = Object.keys(data.section_leaders || {});
   if (categories.length && paperIds.length) {
     const countForCat = (cat) => paperIds.filter(pid => (data.paper_section_scores[pid] || {})[cat]).length;
@@ -564,16 +564,16 @@ function renderAnalysisResult(data) {
       <div style="overflow-x:auto; margin-top:12px;">
         <div style="display:grid; grid-template-columns: 150px repeat(${categories.length}, ${colWidth}px); gap:4px; min-width:${150 + categories.length * (colWidth + 4)}px;">
           <div></div>
-          ${categories.map(c => `<div style="font-family:'IBM Plex Mono',monospace; font-size:9px; text-align:center; color:var(--ink-soft); align-self:end; padding-bottom:5px; line-height:1.2;">${escapeHtml(c)}</div>`).join('')}
+          ${categories.map(c => `<div style="font-family:'IBM Plex Mono',monospace; font-size:10px; font-weight:600; text-align:center; color:var(--ink-soft); align-self:end; padding-bottom:5px; line-height:1.2;">${escapeHtml(c)}</div>`).join('')}
           ${paperIds.map(pid => {
       const scores = data.paper_section_scores[pid] || {};
       const rowLabel = `<div style="font-size:12px; padding:6px 4px; display:flex; align-items:center;">${escapeHtml((titles[pid] || pid).slice(0, 20))}</div>`;
       const cells = categories.map(c => {
         const item = scores[c];
         if (!item) {
-          return `<div title="${escapeHtml(c)}: no matching content found in this section" style="background:#ECECE4; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:10px;">—</div>`;
+          return `<div title="${escapeHtml(c)}: no matching content found in this section" style="background:var(--line); border-radius:5px; height:34px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:11px;">—</div>`;
         }
-        return `<div title="${escapeHtml(c)}: ${item.label} (${item.score}% match)" style="background:${cellColor(item.css_class)}; border-radius:5px; height:32px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:600; font-family:'IBM Plex Mono',monospace;">${item.score}%</div>`;
+        return `<div title="${escapeHtml(c)}: ${item.label} (${item.score}% match)" style="background:${cellColor(item.css_class)}; border-radius:5px; height:34px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12.5px; font-weight:700; font-family:'IBM Plex Mono',monospace; text-shadow:0 1px 2px rgba(0,0,0,.4);">${item.score}%</div>`;
       }).join('');
       return rowLabel + cells;
     }).join('')}
