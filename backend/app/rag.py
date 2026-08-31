@@ -17,11 +17,11 @@ client = OpenAI(
 MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 MAX_RETRIES = 4
-BASE_DELAY_SECONDS = 15  # Gemini free tier resets per-minute; steps stay well clear of it.
+BASE_DELAY_SECONDS = 15  # Groq free tier resets per-minute; steps stay well clear of it.
 
 
 def call_llm(prompt, max_tokens=2048):
-    """Single hardened entry point for every Gemini call in the app (chat Q&A
+    """Single hardened entry point for every LLM call in the app (chat Q&A
     and paper summarization both go through this). Handles three failure
     modes:
 
@@ -95,18 +95,50 @@ def build_context(chunks, titles, max_chars_per_chunk=900):
     return "\n\n".join(parts)
 
 
-def ask(question, paper_ids=None, user_id=None, k=6):
+def ask(question, paper_ids=None, user_id=None, k=6, whole_library=False):
     """The one retrieve-and-generate function every AI feature in Echo calls.
     user_id scopes retrieval so a user can only ever retrieve their own chunks.
 
-    When paper_ids is None, this searches the user's ENTIRE library at once
-    (whole-library mode) rather than one paper — in that case the response
-    also includes ranked_papers: which papers in the library were most
-    relevant to the question, sorted closest-first.
+    Two distinct modes, both driven by explicit paper_ids from the caller
+    (main.py) — this function never guesses which papers a user owns:
+
+    - whole_library=False: paper_ids is the specific subset the user is
+      asking about (usually one paper, "This paper" mode). A single top-k
+      query across just those papers.
+
+    - whole_library=True: paper_ids is the user's ENTIRE library. Retrieval
+      is done PER PAPER (a separate query for each paper_id, each guaranteed
+      a minimum number of results) rather than one global top-k query. This
+      matters: a single strongly-matching paper can otherwise consume most
+      or all of a small global k, starving the other papers in the library
+      of any representation at all — even when they contain content the
+      question genuinely needs. Per-paper retrieval guarantees every paper
+      gets considered before the best chunks overall are kept for the
+      answer context.
+
+    Response includes ranked_papers only in whole_library mode: which
+    papers were most relevant, sorted closest-first.
     """
-    whole_library = paper_ids is None
-    search_k = k * 2 if whole_library else k  # wider net when scanning multiple papers
-    chunks = embeddings.query_chunks(question, k=search_k, paper_ids=paper_ids, user_id=user_id)
+    if not paper_ids:
+        return {"answer": "No indexed content found for this scope yet.", "sources": [], "ranked_papers": None}
+
+    if whole_library:
+        per_paper_k = 4  # guaranteed minimum chunks considered per paper
+        q_emb = embeddings.encode_query(question)
+        chunks = []
+        for pid in paper_ids:
+            chunks.extend(
+                embeddings.query_chunks_by_vector(q_emb, k=per_paper_k, paper_ids=[pid], user_id=user_id)
+            )
+        # Keep the globally best chunks across all papers for the actual
+        # answer context, but only after every paper had a fair chance to
+        # contribute — a paper that's genuinely irrelevant will naturally
+        # fall out here, rather than never being queried at all.
+        chunks.sort(key=lambda c: c["distance"])
+        chunks = chunks[: max(k * 3, per_paper_k * len(paper_ids))]
+    else:
+        chunks = embeddings.query_chunks(question, k=k, paper_ids=paper_ids, user_id=user_id)
+
     if not chunks:
         return {"answer": "No indexed content found for this scope yet.", "sources": [], "ranked_papers": None}
 
@@ -123,7 +155,7 @@ Answer:"""
     try:
         answer = call_llm(prompt, max_tokens=1024)
     except Exception as e:
-        answer = f"Gemini API error: {e}"
+        answer = f"LLM API error: {e}"
 
     ranked_papers = None
     if whole_library:

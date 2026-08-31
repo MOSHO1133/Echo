@@ -298,7 +298,7 @@ function renderPaper() {
   metaEl.textContent = [p.authors, p.year, p.venue].filter(Boolean).join(' · ');
   if (!chatHistory[p.id]) chatHistory[p.id] = [];
   const switcher = library.length > 1
-    ? `<select onchange="viewPaper(this.value)" style="margin:-6px 0 16px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); font-family:'Inter',sans-serif; font-size:13px; background:#fff;">
+    ? `<select onchange="viewPaper(this.value)" style="margin:-6px 0 16px; padding:8px 10px; border-radius:8px; border:1px solid var(--line); font-family:'Inter',sans-serif; font-size:13px; background:var(--card); color:var(--ink);">
         ${library.map(lp => `<option value="${lp.id}" ${lp.id === p.id ? 'selected' : ''}>${escapeHtml(lp.title.slice(0, 60))}</option>`).join('')}
       </select>`
     : '';

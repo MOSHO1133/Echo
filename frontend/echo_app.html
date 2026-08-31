@@ -47,6 +47,12 @@
       --red-soft: #2E1E1B;
     }
 
+    [data-theme="dark"] .btn-ghost {
+      background: var(--card);
+      border-color: var(--line);
+      color: var(--ink);
+    }
+
     [data-theme="dark"] .sidebar {
       background: #0B0E14;
     }
@@ -73,6 +79,12 @@
       background: var(--card);
       color: var(--ink);
       border-color: var(--line);
+    }
+
+    [data-theme="dark"] .btn-ghost {
+      background: var(--card);
+      border-color: var(--line);
+      color: var(--ink);
     }
 
     [data-theme="dark"] .modal-box p {
@@ -288,7 +300,7 @@
       font-family: 'IBM Plex Mono', monospace;
       font-size: 10.5px;
       background: var(--highlighter);
-      color: var(--ink);
+      color: #14181F;
       border-radius: 999px;
       padding: 1px 7px;
       display: none;
@@ -845,7 +857,7 @@
       white-space: pre-wrap;
     }
 
-     .toast {
+    .toast {
       position: fixed;
       bottom: 24px;
       right: 24px;
@@ -1180,7 +1192,7 @@
           style="width:110px; padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px;"
           onkeydown="if(event.key==='Enter') doSearch()">
         <select id="resultCount"
-          style="padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px; background:#fff;">
+          style="padding:13px 12px; border-radius:9px; border:1px solid var(--line); font-size:14px; background:var(--card); color:var(--ink);">
           <option value="10">10 results</option>
           <option value="15" selected>15 results</option>
           <option value="25">25 results</option>

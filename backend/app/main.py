@@ -256,8 +256,12 @@ def _check_rate_limit(user_id, bucket):
 def ask(req: AskReq, user=Depends(get_current_user)):
     if not _check_rate_limit(user["id"], "ask"):
         return {"answer": "Rate limit reached — please wait a minute and try again.", "sources": []}
-    owned_ids = _owned_paper_ids(user["id"], req.paper_ids) if req.paper_ids else None
-    return rag.ask(req.question, paper_ids=owned_ids, user_id=user["id"])
+    if req.paper_ids:
+        owned_ids = _owned_paper_ids(user["id"], req.paper_ids)
+        return rag.ask(req.question, paper_ids=owned_ids, user_id=user["id"], whole_library=False)
+    else:
+        owned_ids = [p["id"] for p in _owned_library_rows(user["id"])]
+        return rag.ask(req.question, paper_ids=owned_ids, user_id=user["id"], whole_library=True)
 
 
 @app.post("/compare")
