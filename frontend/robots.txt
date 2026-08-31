@@ -1,0 +1,4 @@
+﻿User-agent: *
+Allow: /
+
+Sitemap: https://echo-app-2xh.pages.dev/sitemap.xml
