@@ -21,6 +21,19 @@ function initTheme() {
 
 initTheme();
 
+// --- Mobile hamburger nav ----------------------------------------------------
+// Purely presentational: toggles a class on the collapsible sidebar panel.
+// Doesn't touch any app/library/chat state.
+function toggleMobileNav() {
+  const panel = document.getElementById('sidebarCollapsible');
+  if (panel) panel.classList.toggle('open');
+}
+
+function closeMobileNav() {
+  const panel = document.getElementById('sidebarCollapsible');
+  if (panel) panel.classList.remove('open');
+}
+
 const API = window.ECHO_API_BASE || 'http://localhost:8000';
 
 let googleToken = sessionStorage.getItem('echo_google_token') || null;
@@ -138,6 +151,12 @@ function goTo(screenId) {
   if (screenId === 'compare') renderCompare();
   if (screenId === 'summaries') renderSummaries();
   if (screenId === 'library') renderLibrary();
+
+  // On mobile, the nav lives behind the hamburger — close it after a
+  // selection so the app doesn't feel stuck open. No-op on desktop since
+  // .sidebar-collapsible.open only has a visual effect inside the mobile
+  // media query.
+  closeMobileNav();
 } document.querySelectorAll('.navitem').forEach(item => {
   if (!item.classList.contains('disabled')) item.addEventListener('click', () => goTo(item.dataset.screen));
 });
