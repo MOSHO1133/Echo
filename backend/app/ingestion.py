@@ -1,7 +1,7 @@
 import uuid
 import xml.etree.ElementTree as ET
 
-import fitz  # PyMuPDF
+import pymupdf as fitz  # PyMuPDF
 import requests
 
 ARXIV_API = "http://export.arxiv.org/api/query"
