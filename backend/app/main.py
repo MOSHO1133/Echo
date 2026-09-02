@@ -90,10 +90,18 @@ class AddFromSearchReq(BaseModel):
 
 def _store_paper(paper_id, user_id, title, authors, year, venue, source, doi, pdf_url, full_text):
     conn = db.get_conn()
+    # NOTE: "INSERT OR REPLACE" is SQLite-only syntax; Postgres uses
+    # "INSERT ... ON CONFLICT (id) DO UPDATE SET ..." with the same
+    # "excluded" pseudo-table for referencing the incoming values.
     conn.execute(
-        """INSERT OR REPLACE INTO papers
+        """INSERT INTO papers
            (id, user_id, title, authors, year, venue, source, doi, pdf_url, tags, full_text, in_library, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+           ON CONFLICT (id) DO UPDATE SET
+             user_id=excluded.user_id, title=excluded.title, authors=excluded.authors,
+             year=excluded.year, venue=excluded.venue, source=excluded.source, doi=excluded.doi,
+             pdf_url=excluded.pdf_url, tags=excluded.tags, full_text=excluded.full_text,
+             in_library=excluded.in_library, created_at=excluded.created_at""",
         (paper_id, user_id, title, authors, year, venue, source, doi, pdf_url, "", full_text,
          datetime.datetime.now(datetime.UTC).isoformat()),
     )

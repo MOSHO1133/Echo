@@ -211,6 +211,15 @@ def _build_fit_summary(ranked_overall, subtopics, coverage, titles_map):
     }
 
 
+def _normalize(vector):
+    """Manual L2 normalization — used instead of relying on any particular
+    embedding backend's built-in normalization option (the old
+    sentence-transformers call used normalize_embeddings=True, which
+    fastembed's API doesn't have an equivalent parameter for)."""
+    norm = sum(x * x for x in vector) ** 0.5
+    return [x / norm for x in vector] if norm else vector
+
+
 def library_diversity(owned_papers):
     """Heuristic 0-100 diversity score from the average pairwise embedding
     distance between papers' title+methodology+findings text. Higher = less
@@ -223,12 +232,11 @@ def library_diversity(owned_papers):
     if len(owned_papers) < 2:
         return {"score": None, "label": "Add at least 2 papers to measure diversity", "pair_count": 0}
 
-    model = embeddings.get_model()
     texts = [
         f"{p.get('title', '')}. {p.get('methodology') or ''} {p.get('findings') or ''}".strip()
         for p in owned_papers
     ]
-    vectors = model.encode(texts, normalize_embeddings=True)
+    vectors = [_normalize(v) for v in embeddings.embed_texts(texts)]
 
     n = len(vectors)
     dists = []
