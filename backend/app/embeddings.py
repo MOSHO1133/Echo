@@ -1,7 +1,7 @@
 import os
 
 import chromadb
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 
 _model = None
 _client = None
@@ -12,16 +12,13 @@ CHROMA_PATH = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
 def get_model():
     global _model
     if _model is None:
-        # model_kwargs={"low_cpu_mem_usage": False} disables newer transformers'
-        # lazy "meta device" weight initialization, which causes "Cannot copy
-        # out of meta tensor" crashes on some torch/transformers/accelerate
-        # version combinations — this forces real (non-meta) weight loading
-        # up front, which .to("cpu") can then actually operate on.
-        _model = SentenceTransformer(
-            "all-MiniLM-L6-v2",
-            device="cpu",
-            model_kwargs={"low_cpu_mem_usage": False},
-        )
+        # fastembed runs on onnxruntime instead of torch, which cuts memory
+        # usage dramatically compared to the old sentence-transformers/torch
+        # stack — that stack was causing out-of-memory crashes on Render's
+        # 512MB free tier as soon as a paper got processed. Same underlying
+        # model (all-MiniLM-L6-v2, 384-dim output) as before, converted to
+        # ONNX, so retrieval quality is effectively unchanged.
+        _model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
     return _model
 
 
@@ -45,7 +42,9 @@ def index_paper_chunks(paper_id, chunks, user_id):
     model = get_model()
     coll = get_collection()
     texts = [c["text"] for c in chunks]
-    vectors = model.encode(texts).tolist()
+    # model.embed() returns a generator of numpy arrays, one per input text —
+    # materialize to a list of plain lists for Chroma's API.
+    vectors = [v.tolist() for v in model.embed(texts)]
     ids = [f"{paper_id}__{i}" for i in range(len(chunks))]
     metadatas = [{"paper_id": paper_id, "section": c["section"], "user_id": user_id} for c in chunks]
     coll.add(ids=ids, embeddings=vectors, documents=texts, metadatas=metadatas)
@@ -61,7 +60,7 @@ def encode_query(query):
     to run the SAME question against several different filters (e.g. one
     query per paper) can encode once and reuse the vector, instead of paying
     the encoding cost repeatedly."""
-    return get_model().encode([query]).tolist()
+    return [v.tolist() for v in get_model().embed([query])]
 
 
 def _build_where(paper_ids=None, user_id=None):
