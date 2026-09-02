@@ -1,12 +1,10 @@
 import os
 import datetime
-
 import psycopg2
 import psycopg2.extras
 from pgvector.psycopg2 import register_vector
 
 DATABASE_URL = os.environ["DATABASE_URL"]
-
 EMBED_DIM = 384  # all-MiniLM-L6-v2 output size, used by the chunks table below
 
 
@@ -18,7 +16,6 @@ class ConnWrapper:
     local SQLite to hosted Postgres (Supabase). This means main.py, rag.py,
     contribute.py, and summarize.py needed no changes beyond one raw-SQL
     fix (INSERT OR REPLACE isn't valid Postgres syntax)."""
-
     def __init__(self, pg_conn):
         self._conn = pg_conn
 
@@ -43,16 +40,28 @@ def get_conn():
     pg_conn = psycopg2.connect(DATABASE_URL)
     # Registers pgvector's 'vector' type on this connection so numpy arrays
     # passed as query params get adapted correctly — needed by embeddings.py.
+    # Safe to call here because by the time anything but init_db() runs,
+    # the extension is guaranteed to already exist (see init_db below).
     register_vector(pg_conn)
     return ConnWrapper(pg_conn)
 
 
 def init_db():
+    # Step 1: create the extension on a PLAIN connection — register_vector
+    # must NOT be called yet, since on a brand-new database the 'vector'
+    # type doesn't exist until this CREATE EXTENSION runs. Calling
+    # register_vector before this would throw on a fresh Supabase DB.
+    pg_conn = psycopg2.connect(DATABASE_URL)
+    cur = pg_conn.cursor()
+    cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+    pg_conn.commit()
+    pg_conn.close()
+
+    # Step 2: now it's safe to use get_conn() — the extension exists, so
+    # register_vector succeeds, and we can create the rest of the schema.
     conn = get_conn()
     conn.executescript(
         f"""
-        CREATE EXTENSION IF NOT EXISTS vector;
-
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,          -- Google 'sub' claim, stable unique user id
             email TEXT,
@@ -99,7 +108,6 @@ def init_db():
             text TEXT,
             embedding vector({EMBED_DIM})
         );
-
         ALTER TABLE papers ADD COLUMN IF NOT EXISTS user_id TEXT;
         ALTER TABLE feedback ADD COLUMN IF NOT EXISTS user_id TEXT;
         """
