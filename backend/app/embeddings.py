@@ -1,19 +1,34 @@
+import threading
+
 import numpy as np
 from fastembed import TextEmbedding
 
 from . import db
 
 _model = None
+_model_lock = threading.Lock()
 
 
 def get_model():
     global _model
+    # Adding several papers in quick succession fires several background
+    # tasks nearly simultaneously, each landing on its own thread. Without
+    # this lock, multiple threads could all see _model as None at once and
+    # each try to initialize (and download) the model concurrently — which
+    # can corrupt the download or leave one thread waiting forever on a lock
+    # file another thread also holds, hanging that paper's processing
+    # indefinitely with no error ever surfacing. The double-checked lock
+    # keeps this fast for the common case (model already loaded) while
+    # guaranteeing only one thread ever does the actual initialization.
     if _model is None:
-        # fastembed runs on onnxruntime instead of torch, cutting memory use
-        # dramatically compared to sentence-transformers/torch — that stack
-        # was causing out-of-memory crashes on Render's free tier. Same
-        # underlying model (all-MiniLM-L6-v2, 384-dim output) as before.
-        _model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        with _model_lock:
+            if _model is None:
+                # fastembed runs on onnxruntime instead of torch, cutting
+                # memory use dramatically compared to sentence-transformers/
+                # torch — that stack was causing out-of-memory crashes on
+                # Render's free tier. Same underlying model
+                # (all-MiniLM-L6-v2, 384-dim output) as before.
+                _model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
     return _model
 
 
