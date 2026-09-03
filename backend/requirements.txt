@@ -2,7 +2,7 @@ fastapi==0.115.0
 uvicorn==0.30.6
 pymupdf>=1.24.13
 fastembed==0.8.0
-psycopg2-binary==2.9.10
+psycopg2-binary>=2.9.10
 pgvector>=0.3.5
 numpy>=1.24
 anthropic==0.34.2
