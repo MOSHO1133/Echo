@@ -3,27 +3,11 @@ import datetime
 
 import psycopg2
 import psycopg2.extras
-import psycopg2.pool
 from pgvector.psycopg2 import register_vector
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 EMBED_DIM = 384  # all-MiniLM-L6-v2 output size, used by the chunks table below
-
-# A pooled connection is reused across requests instead of opening a fresh
-# TCP+SSL handshake to Supabase on every single query — with the DB in a
-# different region from the app server, that handshake alone can cost
-# 100-300ms, and functions like analyze_library() run many queries per
-# request. minconn=1 keeps at least one warm connection ready; maxconn=10
-# is comfortably under Supabase's free-tier connection limit.
-_pool = None
-
-
-def _get_pool():
-    global _pool
-    if _pool is None:
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DATABASE_URL)
-    return _pool
 
 
 class ConnWrapper:
@@ -31,7 +15,9 @@ class ConnWrapper:
     same sqlite3-style API it was written against — conn.execute(sql, params)
     with '?' placeholders, returning a cursor with .fetchall()/.fetchone(),
     rows behaving like dicts — after the underlying database moved from
-    local SQLite to hosted Postgres (Supabase)."""
+    local SQLite to hosted Postgres (Supabase). This means main.py, rag.py,
+    contribute.py, and summarize.py needed no changes beyond one raw-SQL
+    fix (INSERT OR REPLACE isn't valid Postgres syntax)."""
 
     def __init__(self, pg_conn):
         self._conn = pg_conn
@@ -50,16 +36,13 @@ class ConnWrapper:
         self._conn.commit()
 
     def close(self):
-        # Returns the connection to the pool instead of actually closing the
-        # socket, so the next get_conn() call can reuse it warm.
-        _get_pool().putconn(self._conn)
+        self._conn.close()
 
 
 def get_conn():
-    pg_conn = _get_pool().getconn()
+    pg_conn = psycopg2.connect(DATABASE_URL)
     # Registers pgvector's 'vector' type on this connection so numpy arrays
     # passed as query params get adapted correctly — needed by embeddings.py.
-    # Cheap to call even on an already-registered pooled connection.
     register_vector(pg_conn)
     return ConnWrapper(pg_conn)
 
