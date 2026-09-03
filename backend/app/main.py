@@ -180,7 +180,7 @@ def add_from_search(req: AddFromSearchReq, background_tasks: BackgroundTasks, us
         return {"error": f"Library limit reached ({MAX_LIBRARY_PAPERS} papers). Remove a paper before adding another."}
     paper_id = req.id or str(uuid.uuid4())
     full_text = ingestion.fetch_arxiv_full_text(req.pdf_url) if req.pdf_url else ""
-    if not full_text:
+    if not full_text.strip():
         full_text = req.abstract
     _store_paper(paper_id, user["id"], req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.pdf_url, full_text)
     background_tasks.add_task(_index_and_summarize, paper_id, user["id"], full_text)
