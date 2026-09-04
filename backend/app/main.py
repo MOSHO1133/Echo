@@ -125,6 +125,26 @@ def _index_and_summarize(paper_id, user_id, full_text):
         conn.close()
 
 
+def _fetch_index_and_summarize(paper_id, user_id, pdf_url, abstract):
+    """Background-only entry point for search-added papers: downloading and
+    parsing the actual PDF happens here instead of inside the request
+    handler. A slow or large PDF can take 20-30+ seconds — long enough to
+    exceed Render's own reverse-proxy timeout, which then returns its own
+    timeout page with no CORS headers at all. The browser reports that as a
+    'blocked by CORS policy' error, which is misleading — the real cause is
+    the request simply taking too long, not a CORS misconfiguration. Moving
+    this work to the background means the initial POST response is nearly
+    instant regardless of how slow any individual PDF is."""
+    full_text = ingestion.fetch_arxiv_full_text(pdf_url) if pdf_url else ""
+    if not full_text.strip():
+        full_text = abstract
+    conn = db.get_conn()
+    conn.execute("UPDATE papers SET full_text=? WHERE id=?", (full_text, paper_id))
+    conn.commit()
+    conn.close()
+    _index_and_summarize(paper_id, user_id, full_text)
+
+
 def _owned_paper_ids(user_id, requested_ids):
     """Filters a list of paper_ids down to only those the requesting user
     actually owns — prevents one user from reading/comparing another user's
@@ -179,11 +199,12 @@ def add_from_search(req: AddFromSearchReq, background_tasks: BackgroundTasks, us
     if _library_count(user["id"]) >= MAX_LIBRARY_PAPERS:
         return {"error": f"Library limit reached ({MAX_LIBRARY_PAPERS} papers). Remove a paper before adding another."}
     paper_id = req.id or str(uuid.uuid4())
-    full_text = ingestion.fetch_arxiv_full_text(req.pdf_url) if req.pdf_url else ""
-    if not full_text.strip():
-        full_text = req.abstract
-    _store_paper(paper_id, user["id"], req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.pdf_url, full_text)
-    background_tasks.add_task(_index_and_summarize, paper_id, user["id"], full_text)
+    # Store immediately with the abstract as a safe placeholder — the real
+    # full text (if the PDF download+extraction succeeds) is filled in by
+    # the background task. This keeps the request itself fast no matter how
+    # long that specific PDF takes to fetch and parse.
+    _store_paper(paper_id, user["id"], req.title, ",".join(req.authors), req.year, req.venue, req.source, req.doi, req.pdf_url, req.abstract)
+    background_tasks.add_task(_fetch_index_and_summarize, paper_id, user["id"], req.pdf_url, req.abstract)
     return {"id": paper_id}
 
 
