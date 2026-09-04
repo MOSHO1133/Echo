@@ -301,6 +301,8 @@ async function refreshLibrary() {
   }
 }
 
+let removingIds = new Set();
+
 function renderLibrary() {
   const el = document.getElementById('libraryContent');
   if (library.length === 0) {
@@ -314,8 +316,12 @@ function renderLibrary() {
     <div style="display:flex; gap:8px;"><button class="btn btn-ghost" onclick="goTo('compare')">Compare selected</button><button class="btn btn-primary" onclick="goTo('summaries')">View summaries</button></div></div>`;
   const grid = '<div class="lib-grid">' + library.map(p => {
     const isChecked = selected.has(p.id);
-    return `<div class="card">
-      <div class="remove-btn" onclick="removeFromLibrary('${p.id}')" title="Remove">✕</div>
+    const isRemoving = removingIds.has(p.id);
+    const removeBtn = isRemoving
+      ? `<div class="remove-btn" title="Removing..." style="cursor:default;"><span class="spinner" style="border-color:rgba(87,93,84,.3); border-top-color:var(--ink-soft); width:10px; height:10px; margin:0;"></span></div>`
+      : `<div class="remove-btn" onclick="removeFromLibrary('${p.id}')" title="Remove">✕</div>`;
+    return `<div class="card" style="${isRemoving ? 'opacity:.55; pointer-events:none;' : ''}">
+      ${removeBtn}
       <div class="check ${isChecked ? 'checked' : ''}" onclick="toggleSelect('${p.id}')" title="Select for compare"></div>
       <div class="paper-title" style="font-size:15px; padding-right:50px;">${escapeHtml(p.title)}</div>
       <div class="paper-meta">${escapeHtml(p.authors || '')} ${p.year ? '· ' + escapeHtml(p.year) : ''}</div>
@@ -329,14 +335,23 @@ function renderLibrary() {
 function toggleSelect(id) { if (selected.has(id)) selected.delete(id); else selected.add(id); renderLibrary(); renderCompare(); }
 
 async function removeFromLibrary(id) {
-  await api('/library/' + id, { method: 'DELETE' });
-  selected.delete(id);
-  if (currentPaperId === id) {
-    currentPaperId = null;
-    sessionStorage.removeItem('echo_currentPaperId');
+  removingIds.add(id);
+  renderLibrary();
+  try {
+    await api('/library/' + id, { method: 'DELETE' });
+    selected.delete(id);
+    if (currentPaperId === id) {
+      currentPaperId = null;
+      sessionStorage.removeItem('echo_currentPaperId');
+    }
+    await refreshLibrary();
+    renderSearchResults();
+  } catch (e) {
+    showToast('Failed to remove paper — please try again');
+  } finally {
+    removingIds.delete(id);
+    renderLibrary();
   }
-  await refreshLibrary();
-  renderSearchResults();
 }
 
 async function viewPaper(id) {
