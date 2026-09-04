@@ -22,8 +22,6 @@ function initTheme() {
 initTheme();
 
 // --- Mobile hamburger nav ----------------------------------------------------
-// Purely presentational: toggles a class on the collapsible sidebar panel.
-// Doesn't touch any app/library/chat state.
 function toggleMobileNav() {
   const panel = document.getElementById('sidebarCollapsible');
   if (panel) panel.classList.toggle('open');
@@ -46,9 +44,6 @@ let currentPaperId = sessionStorage.getItem('echo_currentPaperId') || null;
 let chatHistory = {};
 let pollTimer = null;
 
-// Server-owned relevance thresholds/labels, fetched once at boot so the
-// frontend never hardcodes a threshold number that could drift out of sync
-// with relevance.py (the single source of truth on the backend).
 let relevanceConfig = null;
 
 async function loadRelevanceConfig() {
@@ -152,10 +147,6 @@ function goTo(screenId) {
   if (screenId === 'summaries') renderSummaries();
   if (screenId === 'library') renderLibrary();
 
-  // On mobile, the nav lives behind the hamburger — close it after a
-  // selection so the app doesn't feel stuck open. No-op on desktop since
-  // .sidebar-collapsible.open only has a visual effect inside the mobile
-  // media query.
   closeMobileNav();
 } document.querySelectorAll('.navitem').forEach(item => {
   if (!item.classList.contains('disabled')) item.addEventListener('click', () => goTo(item.dataset.screen));
@@ -242,9 +233,6 @@ async function addSelectedToLibrary() {
   renderSearchResults();
 }
 
-// Mirrors the backend's MAX_LIBRARY_PAPERS so the batch-add loop can stop
-// itself early with a clear message instead of firing requests that will
-// just come back as "limit reached" one by one.
 const MAX_LIBRARY_CLIENT_HINT = 5;
 
 async function addFromSearch(btn, paper) {
@@ -427,9 +415,6 @@ function setChatScope(scope) {
   if (chatInput) chatInput.focus();
 }
 
-// Reads thresholds from the server-fetched relevanceConfig instead of
-// hardcoding numbers here — keeps this in permanent lockstep with
-// relevance.py on the backend.
 function relevanceLabel(distance) {
   const cfg = relevanceConfig || {
     high_relevance_threshold: 0.45,
@@ -567,14 +552,8 @@ function renderAnalysisResult(data) {
   const paperIds = Object.keys(titles);
   let html = '';
 
-  // Every badge shows the 0-100 score (higher = better) instead of raw
-  // distance — the score is server-computed and its tier boundaries are
-  // mathematically anchored to the same thresholds driving the color, so
-  // score and color can never disagree.
   const badgeFor = (item) => `<span class="badge ${item.css_class}" style="margin:0;" title="${item.score !== null && item.score !== undefined ? item.score + '% match' : 'no evidence'}"><span class="dot"></span>${escapeHtml(item.label)}</span>`;
 
-  // 0) Fit summary — accounts for ALL papers (high + relevant + loosely
-  // relevant), so the sentence never leaves papers unaccounted for.
   const fs = data.fit_summary;
   if (fs) {
     const parts = [];
@@ -595,7 +574,6 @@ function renderAnalysisResult(data) {
       </div>`;
   }
 
-  // 1) Overall ranked papers
   html += `<div class="card"><div class="eyebrow">Papers ranked by overall relevance</div>`;
   if (!data.ranked_overall || data.ranked_overall.length === 0) {
     html += `<div class="field-body" style="margin-top:8px;">No relevant content found for this question.</div>`;
@@ -609,7 +587,6 @@ function renderAnalysisResult(data) {
   }
   html += `</div>`;
 
-  // 2) Section leaderboards
   const catEntries = Object.entries(data.section_leaders || {});
   html += `<div class="card"><div class="eyebrow">Most relevant paper, by section</div>`;
   if (catEntries.length === 0) {
@@ -629,10 +606,9 @@ function renderAnalysisResult(data) {
   }
   html += `</div>`;
 
-  // 3) Heatmap — cells show a 0-100 score (higher = better) with strong
-  // contrast (bold text + shadow) so numbers stay legible on every color,
-  // and columns are ordered by how much real data is available so the
-  // most informative sections read first, left to right.
+  // Heatmap — FIX: amber ("preprint") cells now use dark text with no
+  // shadow instead of white-with-shadow, since white-on-amber had weak
+  // contrast. Teal and red keep white text (both are dark enough for it).
   let categories = Object.keys(data.section_leaders || {});
   if (categories.length && paperIds.length) {
     const countForCat = (cat) => paperIds.filter(pid => (data.paper_section_scores[pid] || {})[cat]).length;
@@ -640,6 +616,8 @@ function renderAnalysisResult(data) {
 
     const colWidth = 92;
     const cellColor = (cssClass) => cssClass === 'reviewed' ? '#2F6F6B' : (cssClass === 'preprint' ? '#C48A2E' : '#B4432E');
+    const cellTextColor = (cssClass) => cssClass === 'preprint' ? '#14181F' : '#fff';
+    const cellTextShadow = (cssClass) => cssClass === 'preprint' ? 'none' : '0 1px 2px rgba(0,0,0,.4)';
     html += `<div class="card"><div class="eyebrow">Relevance heatmap</div>
       <div style="font-size:12.5px; color:var(--ink-soft); margin-top:4px;">Each cell is a match score from 0–100 (higher = closer match). Columns are ordered left-to-right by how much data is available.</div>
       <div style="overflow-x:auto; margin-top:12px;">
@@ -654,7 +632,7 @@ function renderAnalysisResult(data) {
         if (!item) {
           return `<div title="${escapeHtml(c)}: no matching content found in this section" style="background:var(--line); border-radius:5px; height:34px; display:flex; align-items:center; justify-content:center; color:var(--ink-soft); font-size:11px;">—</div>`;
         }
-        return `<div title="${escapeHtml(c)}: ${item.label} (${item.score}% match)" style="background:${cellColor(item.css_class)}; border-radius:5px; height:34px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12.5px; font-weight:700; font-family:'IBM Plex Mono',monospace; text-shadow:0 1px 2px rgba(0,0,0,.4);">${item.score}%</div>`;
+        return `<div title="${escapeHtml(c)}: ${item.label} (${item.score}% match)" style="background:${cellColor(item.css_class)}; border-radius:5px; height:34px; display:flex; align-items:center; justify-content:center; color:${cellTextColor(item.css_class)}; font-size:12.5px; font-weight:700; font-family:'IBM Plex Mono',monospace; text-shadow:${cellTextShadow(item.css_class)};">${item.score}%</div>`;
       }).join('');
       return rowLabel + cells;
     }).join('')}
@@ -664,8 +642,6 @@ function renderAnalysisResult(data) {
     </div>`;
   }
 
-  // 4) Sub-topic coverage — colored dot uses the same score-based tier as
-  // the heatmap, with the score visible in the tooltip.
   const subtopics = data.subtopics || [];
   if (subtopics.length) {
     const colWidth = 100;

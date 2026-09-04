@@ -546,6 +546,7 @@ h1.screen-title {
 
 .gap-highlight {
   background: linear-gradient(104deg, transparent 0, var(--highlighter) 0, var(--highlighter) 100%, transparent 100%);
+  color: #14181F;
   padding: 0.05em 0.35em;
   border-radius: 2px 8px 3px 9px/9px 3px 8px 2px;
   box-decoration-break: clone;
