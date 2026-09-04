@@ -109,39 +109,59 @@ def _store_paper(paper_id, user_id, title, authors, year, venue, source, doi, pd
     conn.close()
 
 
+import threading
+
+# Serializes the heavy part of paper processing (chunking, embedding, LLM
+# summarization) so only one paper is ever being fully processed at a time,
+# regardless of how many get added in a batch. Render's free-tier 512MB
+# memory limit gets exceeded when several papers' embedding + LLM calls run
+# concurrently — confirmed via repeated "Instance failed: Ran out of
+# memory" crashes after adding multiple papers together. Trading batch-add
+# speed for not crashing is the right call on this tier.
+_processing_lock = threading.Lock()
+
+
 def _index_and_summarize(paper_id, user_id, full_text):
     """Runs in the background after the paper row already exists, so a
     summarization failure never hides the paper from the library."""
-    try:
-        sections = processing.detect_sections(full_text)
-        chunks = processing.chunk_sections(sections)
-        embeddings.index_paper_chunks(paper_id, chunks, user_id)
-        if chunks:
-            summarize.summarize_paper(paper_id, user_id)
-    except Exception as e:
-        conn = db.get_conn()
-        conn.execute("UPDATE papers SET research_gap=? WHERE id=?", (f"Processing failed: {e}", paper_id))
-        conn.commit()
-        conn.close()
+    with _processing_lock:
+        try:
+            sections = processing.detect_sections(full_text)
+            chunks = processing.chunk_sections(sections)
+            embeddings.index_paper_chunks(paper_id, chunks, user_id)
+            if chunks:
+                summarize.summarize_paper(paper_id, user_id)
+        except Exception as e:
+            conn = db.get_conn()
+            conn.execute("UPDATE papers SET research_gap=? WHERE id=?", (f"Processing failed: {e}", paper_id))
+            conn.commit()
+            conn.close()
 
 
 def _fetch_index_and_summarize(paper_id, user_id, pdf_url, abstract):
     """Background-only entry point for search-added papers: downloading and
     parsing the actual PDF happens here instead of inside the request
-    handler. A slow or large PDF can take 20-30+ seconds — long enough to
-    exceed Render's own reverse-proxy timeout, which then returns its own
-    timeout page with no CORS headers at all. The browser reports that as a
-    'blocked by CORS policy' error, which is misleading — the real cause is
-    the request simply taking too long, not a CORS misconfiguration. Moving
-    this work to the background means the initial POST response is nearly
-    instant regardless of how slow any individual PDF is."""
-    full_text = ingestion.fetch_arxiv_full_text(pdf_url) if pdf_url else ""
-    if not full_text.strip():
-        full_text = abstract
-    conn = db.get_conn()
-    conn.execute("UPDATE papers SET full_text=? WHERE id=?", (full_text, paper_id))
-    conn.commit()
-    conn.close()
+    handler, so a slow PDF can't cause a proxy-timeout-flavored CORS error.
+    Wrapped in its own try/except: some PDFs extract into text containing
+    NUL (\\x00) bytes (a PyMuPDF quirk with certain encodings), and Postgres
+    TEXT columns reject those outright — without this handling, that raised
+    exception used to kill the background task silently, leaving the paper
+    stuck on 'Processing...' forever with no error ever surfacing."""
+    try:
+        full_text = ingestion.fetch_arxiv_full_text(pdf_url) if pdf_url else ""
+        if not full_text.strip():
+            full_text = abstract
+        full_text = full_text.replace("\x00", "")
+        conn = db.get_conn()
+        conn.execute("UPDATE papers SET full_text=? WHERE id=?", (full_text, paper_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        conn = db.get_conn()
+        conn.execute("UPDATE papers SET research_gap=? WHERE id=?", (f"Processing failed: {e}", paper_id))
+        conn.commit()
+        conn.close()
+        return
     _index_and_summarize(paper_id, user_id, full_text)
 
 
