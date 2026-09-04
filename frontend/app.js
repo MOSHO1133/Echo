@@ -183,14 +183,23 @@ async function doSearch() {
   }
 }
 
+let searchSelected = new Set();
+
 function renderSearchResults() {
   const el = document.getElementById('searchResults');
   const results = window._lastResults || [];
-  if (results.length === 0) { el.innerHTML = ''; return; }
-  el.innerHTML = results.map(p => {
+  if (results.length === 0) { el.innerHTML = ''; searchSelected.clear(); return; }
+  const toolbar = searchSelected.size > 0
+    ? `<div class="lib-toolbar"><span>${searchSelected.size} selected</span>
+        <button class="btn btn-teal" onclick="addSelectedToLibrary()">+ Add ${searchSelected.size} to library</button></div>`
+    : '';
+  el.innerHTML = toolbar + results.map(p => {
     const added = library.some(lp => lp.id === p.id || lp.title === p.title);
-    return `<div class="card"><div class="card-top"><div>
-      <div class="paper-title">${escapeHtml(p.title)}</div>
+    const isChecked = searchSelected.has(p.id);
+    return `<div class="card">
+      ${added ? '' : `<div class="check ${isChecked ? 'checked' : ''}" onclick="toggleSearchSelect('${p.id}')" title="Select to add"></div>`}
+      <div class="card-top"><div>
+      <div class="paper-title" style="padding-right:36px;">${escapeHtml(p.title)}</div>
       <div class="paper-meta">${escapeHtml((p.authors || []).join(', '))} · ${escapeHtml(p.year)} · ${escapeHtml(p.venue)}</div>
       <span class="badge preprint"><span class="dot"></span>arXiv</span>
     </div></div>
@@ -200,6 +209,43 @@ function renderSearchResults() {
     </div></div>`;
   }).join('');
 }
+
+function toggleSearchSelect(id) {
+  if (searchSelected.has(id)) searchSelected.delete(id);
+  else searchSelected.add(id);
+  renderSearchResults();
+}
+
+async function addSelectedToLibrary() {
+  const results = window._lastResults || [];
+  const papers = results.filter(p => searchSelected.has(p.id));
+  if (papers.length === 0) return;
+  showToast(`Adding ${papers.length} papers — this happens one at a time`);
+  for (const paper of papers) {
+    if (library.length >= MAX_LIBRARY_CLIENT_HINT) {
+      showToast('Library limit reached — stopping here. Remove a paper to add more.');
+      break;
+    }
+    try {
+      const result = await api('/library/add-from-search', { method: 'POST', body: JSON.stringify(paper) });
+      if (result.error) {
+        showToast(result.error);
+        break;
+      }
+      searchSelected.delete(paper.id);
+      await refreshLibrary();
+    } catch (e) {
+      showToast(`Failed to add "${paper.title.slice(0, 40)}" — stopping here.`);
+      break;
+    }
+  }
+  renderSearchResults();
+}
+
+// Mirrors the backend's MAX_LIBRARY_PAPERS so the batch-add loop can stop
+// itself early with a clear message instead of firing requests that will
+// just come back as "limit reached" one by one.
+const MAX_LIBRARY_CLIENT_HINT = 5;
 
 async function addFromSearch(btn, paper) {
   if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
@@ -211,6 +257,7 @@ async function addFromSearch(btn, paper) {
       if (btn) { btn.disabled = false; btn.textContent = '+ Add to library'; }
       return;
     }
+    searchSelected.delete(paper.id);
     await refreshLibrary();
     renderSearchResults();
     showToast('Added! Summaries will fill in shortly.');
