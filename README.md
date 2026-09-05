@@ -31,48 +31,45 @@ way, through a full production migration — rather than a marketing-level featu
 > renders these automatically once the files exist; nothing else needs to change.
 
 <table>
+<tr>
 <td width="50%">
 <img src="screenshots/login.png" alt="Login"/>
 <br><sub><b>Login</b> — Google Sign-In gate</sub>
 </td>
-
 <td width="50%">
 <img src="screenshots/search.png" alt="Search & Upload"/>
 <br><sub><b>Search & Upload</b> — live arXiv search with year filtering, multi-select batch add, and PDF upload</sub>
 </td>
+</tr>
+<tr>
 <td width="50%">
 <img src="screenshots/library.png" alt="Library"/>
 <br><sub><b>Library</b> — 5-paper cap, diversity score, per-paper processing status</sub>
 </td>
-</tr>
-<tr>
 <td width="50%">
 <img src="screenshots/paper-ask.png" alt="Paper & Ask"/>
 <br><sub><b>Paper & Ask</b> — four-field summary plus a scoped chat panel (this paper / whole library)</sub>
 </td>
+</tr>
+<tr>
 <td width="50%">
 <img src="screenshots/compare.png" alt="Compare"/>
 <br><sub><b>Compare</b> — side-by-side summary fields across 2+ selected papers</sub>
 </td>
-</tr>
-<tr>
 <td width="50%">
 <img src="screenshots/summaries.png" alt="Summaries"/>
 <br><sub><b>Summaries</b> — every paper's four fields at a glance</sub>
 </td>
+</tr>
+<tr>
 <td width="50%">
 <img src="screenshots/contribute.png" alt="Contribute"/>
 <br><sub><b>Contribute</b> — embedding-matched idea-to-literature fit, with a novelty label</sub>
 </td>
-</tr>
-<tr>
 <td width="50%">
 <img src="screenshots/analyze.png" alt="Analyze"/>
 <br><sub><b>Analyze</b> — relevance heatmap and sub-topic coverage grid across the whole library</sub>
 </td>
-
-  
-
 </tr>
 </table>
 
