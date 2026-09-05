@@ -31,10 +31,9 @@ way, through a full production migration — rather than a marketing-level featu
 > renders these automatically once the files exist; nothing else needs to change.
 
 <table>
-<tr>
-  <td width="50%">
+<td width="50%">
 <img src="screenshots/login.png" alt="Login"/>
-<br><sub><b>Library</b> — 5-paper cap, diversity score, per-paper processing status</sub>
+<br><sub><b>Login</b> — Google Sign-In gate</sub>
 </td>
 
 <td width="50%">
