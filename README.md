@@ -32,53 +32,44 @@ way, through a full production migration — rather than a marketing-level featu
 
 <table>
 <tr>
-  <td width="50%">
-<<<<<<< HEAD
+<td width="50%">
 <img src="screenshots/login.png" alt="Login"/>
-<br><sub><b>Library</b> — 5-paper cap, diversity score, per-paper processing status</sub>
-=======
-<img width="50%"  alt="login" src="https://github.com/user-attachments/assets/5e570c73-e939-4267-9106-eb0cff178d00" />
-<br><sub><b>Mobile</b> — collapsible hamburger nav, full feature parity on small screens</sub>
->>>>>>> 1c166835420c7d9b9885a718dd158ec4607e896d
+<br><sub><b>Login</b> — Google Sign-In gate</sub>
 </td>
-
 <td width="50%">
 <img src="screenshots/search.png" alt="Search & Upload"/>
 <br><sub><b>Search & Upload</b> — live arXiv search with year filtering, multi-select batch add, and PDF upload</sub>
 </td>
+</tr>
+<tr>
 <td width="50%">
 <img src="screenshots/library.png" alt="Library"/>
 <br><sub><b>Library</b> — 5-paper cap, diversity score, per-paper processing status</sub>
 </td>
-</tr>
-<tr>
 <td width="50%">
 <img src="screenshots/paper-ask.png" alt="Paper & Ask"/>
 <br><sub><b>Paper & Ask</b> — four-field summary plus a scoped chat panel (this paper / whole library)</sub>
 </td>
+</tr>
+<tr>
 <td width="50%">
 <img src="screenshots/compare.png" alt="Compare"/>
 <br><sub><b>Compare</b> — side-by-side summary fields across 2+ selected papers</sub>
 </td>
-</tr>
-<tr>
 <td width="50%">
 <img src="screenshots/summaries.png" alt="Summaries"/>
 <br><sub><b>Summaries</b> — every paper's four fields at a glance</sub>
 </td>
+</tr>
+<tr>
 <td width="50%">
 <img src="screenshots/contribute.png" alt="Contribute"/>
 <br><sub><b>Contribute</b> — embedding-matched idea-to-literature fit, with a novelty label</sub>
 </td>
-</tr>
-<tr>
 <td width="50%">
 <img src="screenshots/analyze.png" alt="Analyze"/>
 <br><sub><b>Analyze</b> — relevance heatmap and sub-topic coverage grid across the whole library</sub>
 </td>
-
-  
-
 </tr>
 </table>
 
@@ -891,8 +882,4 @@ vanish at any moment, independent of anything the user did wrong.
 
 Licensed under the [Apache License 2.0](./LICENSE).
 
-<<<<<<< HEAD
 Built by **Muhammad Shees**.
-=======
-Built by **Muhammad Shees**.
->>>>>>> 1c166835420c7d9b9885a718dd158ec4607e896d
