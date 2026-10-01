@@ -33,8 +33,13 @@ way, through a full production migration — rather than a marketing-level featu
 <table>
 <tr>
   <td width="50%">
+<<<<<<< HEAD
 <img src="screenshots/login.png" alt="Login"/>
 <br><sub><b>Library</b> — 5-paper cap, diversity score, per-paper processing status</sub>
+=======
+<img width="50%"  alt="login" src="https://github.com/user-attachments/assets/5e570c73-e939-4267-9106-eb0cff178d00" />
+<br><sub><b>Mobile</b> — collapsible hamburger nav, full feature parity on small screens</sub>
+>>>>>>> 1c166835420c7d9b9885a718dd158ec4607e896d
 </td>
 
 <td width="50%">
@@ -886,4 +891,8 @@ vanish at any moment, independent of anything the user did wrong.
 
 Licensed under the [Apache License 2.0](./LICENSE).
 
+<<<<<<< HEAD
 Built by **Muhammad Shees**.
+=======
+Built by **Muhammad Shees**.
+>>>>>>> 1c166835420c7d9b9885a718dd158ec4607e896d
